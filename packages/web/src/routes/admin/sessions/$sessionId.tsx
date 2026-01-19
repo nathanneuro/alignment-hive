@@ -62,7 +62,9 @@ function SessionDetail() {
               </div>
               <div>
                 <dt className="text-muted-foreground">Project</dt>
-                <dd>{session.project}</dd>
+                <dd className="truncate" title={session.project}>
+                  {formatProject(session.project)}
+                </dd>
               </div>
               <div>
                 <dt className="text-muted-foreground">Lines</dt>
@@ -154,4 +156,15 @@ function SessionDetail() {
       </div>
     </div>
   );
+}
+
+function formatProject(project: string): string {
+  // Extract repo name from github.com/owner/repo format
+  const match = project.match(/github\.com\/([^/]+\/[^/]+)/);
+  if (match) {
+    return match[1];
+  }
+  // Fallback: show last part of path
+  const parts = project.split('/');
+  return parts[parts.length - 1] || project;
 }

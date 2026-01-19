@@ -148,6 +148,11 @@ function VirtualizedBlockList({
     overscan: 10,
   });
 
+  // Remeasure all items when expanded blocks change
+  useEffect(() => {
+    virtualizer.measure();
+  }, [virtualizer, expandedBlocks]);
+
   return (
     <div
       ref={parentRef}
@@ -325,9 +330,20 @@ function getBlockSummary(block: LogicalBlock): string {
 
 function getTypeLabel(block: LogicalBlock): string {
   if (block.type === 'tool' && 'toolName' in block) {
-    return block.toolName.toUpperCase().slice(0, 6);
+    // Use common abbreviations for known tools
+    const toolAbbrevs: Record<string, string> = {
+      WebFetch: 'FETCH',
+      TodoWrite: 'TODO',
+    };
+    return toolAbbrevs[block.toolName] ?? block.toolName.toUpperCase().slice(0, 6);
   }
-  return block.type.toUpperCase().slice(0, 6);
+  // Use readable abbreviations for block types
+  const typeAbbrevs: Record<string, string> = {
+    thinking: 'THINK',
+    assistant: 'ASST',
+    summary: 'SUMM',
+  };
+  return typeAbbrevs[block.type] ?? block.type.toUpperCase();
 }
 
 function getTypeColor(block: LogicalBlock): string {

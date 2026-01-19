@@ -43,14 +43,14 @@ function SessionsList() {
                       params={{ userId: session.userId }}
                       className="text-primary hover:underline"
                     >
-                      {session.user.firstName ?? session.user.email}
+                      {formatUserName(session.user)}
                     </Link>
                   ) : (
                     <span className="text-muted-foreground">Unknown</span>
                   )}
                 </td>
-                <td className="px-4 py-3 text-sm text-muted-foreground">
-                  {session.project}
+                <td className="px-4 py-3 text-sm text-muted-foreground truncate max-w-[200px]" title={session.project}>
+                  {formatProject(session.project)}
                 </td>
                 <td className="px-4 py-3 text-sm tabular-nums">
                   {session.lineCount}
@@ -112,4 +112,25 @@ function formatRelativeTime(timestamp: number): string {
   if (days < 7) return `${days}d ago`;
 
   return new Date(timestamp).toLocaleDateString();
+}
+
+function formatUserName(user: { firstName?: string; lastName?: string; email: string }): string {
+  if (user.firstName && user.lastName) {
+    return `${user.firstName} ${user.lastName}`;
+  }
+  if (user.firstName) {
+    return user.firstName;
+  }
+  return user.email;
+}
+
+function formatProject(project: string): string {
+  // Extract repo name from github.com/owner/repo format
+  const match = project.match(/github\.com\/([^/]+\/[^/]+)/);
+  if (match) {
+    return match[1];
+  }
+  // Fallback: show last part of path
+  const parts = project.split('/');
+  return parts[parts.length - 1] || project;
 }

@@ -33,13 +33,13 @@ function AdminLayout() {
             <div className="flex items-center gap-4">
               <Link
                 to="/admin/sessions"
-                className="text-sm text-muted-foreground hover:text-foreground [&.active]:text-foreground"
+                className="text-sm text-muted-foreground hover:text-foreground [&.active]:text-foreground [&.active]:font-medium"
               >
                 Sessions
               </Link>
               <Link
                 to="/admin/users"
-                className="text-sm text-muted-foreground hover:text-foreground [&.active]:text-foreground"
+                className="text-sm text-muted-foreground hover:text-foreground [&.active]:text-foreground [&.active]:font-medium"
               >
                 Users
               </Link>

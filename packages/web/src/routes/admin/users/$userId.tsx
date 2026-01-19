@@ -71,7 +71,7 @@ function UserDetail() {
             <div className="mt-4">
               <span className="text-sm text-muted-foreground">Projects: </span>
               <span className="text-sm">
-                {user.projects.join(', ')}
+                {user.projects.map(formatProject).join(', ')}
               </span>
             </div>
           )}
@@ -99,8 +99,8 @@ function UserDetail() {
                   <td className="px-4 py-3 font-mono text-sm">
                     {session.sessionId.slice(0, 8)}
                   </td>
-                  <td className="px-4 py-3 text-sm text-muted-foreground">
-                    {session.project}
+                  <td className="px-4 py-3 text-sm text-muted-foreground truncate max-w-[200px]" title={session.project}>
+                    {formatProject(session.project)}
                   </td>
                   <td className="px-4 py-3 text-sm tabular-nums">
                     {session.lineCount}
@@ -163,4 +163,15 @@ function formatRelativeTime(timestamp: number): string {
   if (days < 7) return `${days}d ago`;
 
   return new Date(timestamp).toLocaleDateString();
+}
+
+function formatProject(project: string): string {
+  // Extract repo name from github.com/owner/repo format
+  const match = project.match(/github\.com\/([^/]+\/[^/]+)/);
+  if (match) {
+    return match[1];
+  }
+  // For local paths, show just the last directory
+  const parts = project.split('/');
+  return parts[parts.length - 1] || project;
 }
