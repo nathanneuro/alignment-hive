@@ -6,18 +6,19 @@ Claude Code infrastructure for AI safety researchers.
 
 @README.md explains what this is. Keep it up to date as the project evolves.
 
-**Important:** The installation instructions in `README.md` and `web/src/routes/_authenticated/welcome.tsx` must stay in sync. When updating one, update the other.
+**Important:** The installation instructions in `README.md` and `packages/web/src/routes/_authenticated/welcome.tsx` must stay in sync. When updating one, update the other.
 
 This is a **bun monorepo**:
-- `web/` - TanStack Start web app (alignment-hive.com)
-- `hive-mind/` - CLI for session extraction
+- `packages/web/` - TanStack Start web app (alignment-hive.com)
+- `packages/hive-mind-cli/` - CLI for session extraction
+- `packages/shared/` - Shared code (schemas, parsing)
 - `plugins/` - Plugin distributions
 
 ## Working on the Code
 
-**For web app**: Read [web/README.md](web/README.md) for local development setup
+**For web app**: Read [packages/web/README.md](packages/web/README.md) for local development setup
 
-**For CLI**: Read [hive-mind/CLAUDE.md](hive-mind/CLAUDE.md) for development guidelines. Run CLI commands from the project root: `bun hive-mind/cli/cli.ts <command>`
+**For CLI**: Read [packages/hive-mind-cli/CLAUDE.md](packages/hive-mind-cli/CLAUDE.md) for development guidelines. Run CLI commands from the project root: `bun packages/hive-mind-cli/src/cli.ts <command>`
 
 ## Running Scripts
 
@@ -30,8 +31,8 @@ bun run --filter '*' build
 bun run --filter '*' format
 
 # Specific workspace
-bun run --filter '@alignment-hive/hive-mind' test
-bun run --filter '@alignment-hive/hive-mind' lint
+bun run --filter '@alignment-hive/hive-mind-cli' test
+bun run --filter '@alignment-hive/hive-mind-cli' lint
 bun run --filter '@alignment-hive/web' lint
 ```
 
@@ -39,7 +40,7 @@ Workspaces without the script are skipped (no error).
 
 For workspace-specific tasks like dev servers:
 ```bash
-cd web && bun run dev
+cd packages/web && bun run dev
 ```
 
 ## Adding New Plugins

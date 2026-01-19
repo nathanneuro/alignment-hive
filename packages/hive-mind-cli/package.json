@@ -1,0 +1,26 @@
+{
+  "name": "@alignment-hive/hive-mind-cli",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "license": "MIT",
+  "scripts": {
+    "test": "bun test",
+    "lint": "tsc --noEmit -p src/tsconfig.json && eslint src --report-unused-disable-directives --max-warnings 0",
+    "lint:fix": "eslint src --fix",
+    "format": "prettier --write src",
+    "build": "bun build src/cli.ts --outfile=../../plugins/hive-mind/cli.js --target=bun"
+  },
+  "dependencies": {
+    "@alignment-hive/shared": "workspace:*",
+    "convex": "^1.31.0",
+    "zod": "^4"
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "@types/node": "^24.10.4",
+    "prettier": "^3.5.3",
+    "smol-toml": "^1.6.0",
+    "typescript": "^5"
+  }
+}

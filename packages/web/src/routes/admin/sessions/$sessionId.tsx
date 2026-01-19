@@ -1,0 +1,157 @@
+import { useQuery } from 'convex/react';
+import { Link, createFileRoute } from '@tanstack/react-router';
+import { api } from '../../../../convex/_generated/api';
+import { SessionViewer } from '~/components/session-viewer';
+
+export const Route = createFileRoute('/admin/sessions/$sessionId')({
+  component: SessionDetail,
+});
+
+function SessionDetail() {
+  const { sessionId } = Route.useParams();
+  const data = useQuery(api.admin.getSession, { sessionId });
+
+  if (data === undefined) {
+    return (
+      <div className="flex items-center justify-center py-12">
+        <div className="text-muted-foreground">Loading...</div>
+      </div>
+    );
+  }
+
+  if (!data) {
+    return (
+      <div className="flex items-center justify-center py-12">
+        <div className="text-destructive">Session not found</div>
+      </div>
+    );
+  }
+
+  const { session, contentUrl, user, parentSession, childSessions } = data;
+
+  return (
+    <div className="space-y-6">
+      <div className="flex items-center gap-2 text-sm text-muted-foreground">
+        <Link to="/admin/sessions" className="hover:text-foreground">
+          Sessions
+        </Link>
+        <span>/</span>
+        <span className="font-mono">{sessionId.slice(0, 8)}</span>
+      </div>
+
+      <div className="grid gap-4 lg:grid-cols-[1fr_300px]">
+        <div className="space-y-4">
+          {contentUrl ? (
+            <SessionViewer url={contentUrl} sessionId={sessionId} />
+          ) : (
+            <div className="rounded-lg border border-border bg-card p-8 text-center text-muted-foreground">
+              Session content not uploaded
+            </div>
+          )}
+        </div>
+
+        <div className="space-y-4">
+          <div className="rounded-lg border border-border bg-card p-4">
+            <h2 className="mb-3 text-sm font-medium text-foreground">
+              Session Info
+            </h2>
+            <dl className="space-y-2 text-sm">
+              <div>
+                <dt className="text-muted-foreground">ID</dt>
+                <dd className="font-mono">{session.sessionId}</dd>
+              </div>
+              <div>
+                <dt className="text-muted-foreground">Project</dt>
+                <dd>{session.project}</dd>
+              </div>
+              <div>
+                <dt className="text-muted-foreground">Lines</dt>
+                <dd>{session.lineCount}</dd>
+              </div>
+              <div>
+                <dt className="text-muted-foreground">Last Activity</dt>
+                <dd>{new Date(session.lastHeartbeat).toLocaleString()}</dd>
+              </div>
+              {session.upload && (
+                <div>
+                  <dt className="text-muted-foreground">Uploaded</dt>
+                  <dd>
+                    {new Date(session.upload.uploadedAt).toLocaleString()}
+                  </dd>
+                </div>
+              )}
+            </dl>
+          </div>
+
+          {user && (
+            <div className="rounded-lg border border-border bg-card p-4">
+              <h2 className="mb-3 text-sm font-medium text-foreground">User</h2>
+              <dl className="space-y-2 text-sm">
+                <div>
+                  <dt className="text-muted-foreground">Name</dt>
+                  <dd>
+                    <Link
+                      to="/admin/users/$userId"
+                      params={{ userId: session.userId }}
+                      className="text-primary hover:underline"
+                    >
+                      {user.firstName} {user.lastName}
+                    </Link>
+                  </dd>
+                </div>
+                <div>
+                  <dt className="text-muted-foreground">Email</dt>
+                  <dd>{user.email}</dd>
+                </div>
+                <div>
+                  <dt className="text-muted-foreground">Sessions</dt>
+                  <dd>{user.sessionCount}</dd>
+                </div>
+                <div>
+                  <dt className="text-muted-foreground">Uploads</dt>
+                  <dd>{user.uploadCount}</dd>
+                </div>
+              </dl>
+            </div>
+          )}
+
+          {parentSession && (
+            <div className="rounded-lg border border-border bg-card p-4">
+              <h2 className="mb-3 text-sm font-medium text-foreground">
+                Parent Session
+              </h2>
+              <Link
+                to="/admin/sessions/$sessionId"
+                params={{ sessionId: parentSession.sessionId }}
+                className="font-mono text-sm text-primary hover:underline"
+              >
+                {parentSession.sessionId.slice(0, 8)}
+              </Link>
+            </div>
+          )}
+
+          {childSessions.length > 0 && (
+            <div className="rounded-lg border border-border bg-card p-4">
+              <h2 className="mb-3 text-sm font-medium text-foreground">
+                Agent Sessions ({childSessions.length})
+              </h2>
+              <ul className="space-y-1">
+                {childSessions.map((child) => (
+                  <li key={child._id}>
+                    <Link
+                      to="/admin/sessions/$sessionId"
+                      params={{ sessionId: child.sessionId }}
+                      className="font-mono text-sm text-primary hover:underline"
+                    >
+                      {child.sessionId.slice(0, 8)}
+                    </Link>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
