@@ -280,8 +280,98 @@ Commands to recommend allowing in the base tier:
 ### Utility
 - `Bash(sleep:*)`, `Bash(export:*)`
 
+### Control Flow (for loops)
+- `Bash(for:*)`, `Bash(do)`, `Bash(done)` - safe, loop body validated separately
+
 ### Paired Deny Rules
 - `Bash(find*-exec*)`
+
+---
+
+### Experiment 6: For Loops (`for:*`, `do`, `done`)
+
+**Question:** Can `Bash(for:*)` be used to bypass permissions for commands inside loops?
+
+**Setup:**
+- Allow: `Bash(for:*)`, `Bash(do)`, `Bash(done)`
+- Allow: `Bash(grep:*)`
+- Do NOT allow: `echo`, `rm`
+
+**Test 1: Simple for loop with allowed command in body**
+```bash
+for i in a b c; do
+grep --version
+done
+```
+- Result: Ran successfully, no prompt ✓
+
+**Test 2: For loop with disallowed command in body**
+```bash
+for i in 1 2 3; do
+echo $i
+done
+```
+- Result: Prompted for `echo` → Claude Code validates loop body separately ✓
+
+**Test 3: Command substitution in for list**
+```bash
+for i in `echo test`; do
+grep --version
+done
+```
+- Result: Generic yes/no prompt (parser gives up on backticks)
+
+**Test 4: Various command substitution forms**
+- `$(command)` syntax → Generic prompt
+- Backticks → Generic prompt
+- `$(< file)` → Generic prompt
+- C-style `for ((i=0; i<3; i++))` → Generic prompt
+
+**Test 5: Simple variable expansion**
+```bash
+echo $HOME
+```
+- Result: Works fine, properly parsed ✓
+
+**Conclusion:**
+1. `for:*` + `do` + `done` is **SAFE** - loop body commands are validated separately
+2. Any form of command substitution (`$()`, backticks, `$(< file)`) causes the parser to give up → falls back to generic yes/no prompt
+3. Simple variable expansion (`$VAR`) works fine
+4. No security bypasses found
+
+**Implication:** Can recommend allowing `for:*`, `do`, `done` for users who need bash loops. Should also add guidance to prefer simple commands and avoid command substitution when possible (to get proper permission parsing).
+
+---
+
+### Experiment 7: Directory Access Prompt Bug (rm + glob)
+
+**Observation:** When running `rm ./pattern-*`, user gets prompted "allow access to agile-glow-5" even though already in acceptEdits mode.
+
+**Investigation:**
+
+| Command | Prompt? | Notes |
+|---------|---------|-------|
+| `touch ./test-file` | No | Simple touch works |
+| `rm ./test-file` | No | Simple rm works |
+| `ls ./docs/*.md` | No | ls with glob works |
+| `ls ./nonexistent-*` | No | ls with non-matching glob works |
+| `rm -f ./nonexistent-*` | **YES** | Prompts for directory access |
+| `rm ./glob-test-*` | **YES** | Prompts for directory access |
+| `rm ./glob-test-1 ./glob-test-2` | No | Explicit filenames work |
+
+**Conclusion:** Bug is specifically the combination of `rm` + glob pattern. Other commands with globs work fine. `rm` with explicit filenames works fine.
+
+**Prompt shown:** "Yes, and always allow access to agile-glow-5/ from this project"
+
+**Status:** Bug to report to Claude Code team.
+
+---
+
+## Other Discoveries
+
+### Claude Self-Edit Option
+
+When Claude attempts to edit settings.local.json, the permission prompt includes an option: "Yes, and allow Claude to edit its own settings for this session". Could be useful for dynamic permission workflows where Claude adds permissions as needed.
 
 ---
 
@@ -293,6 +383,8 @@ Commands to recommend allowing in the base tier:
 4. **WebFetch tiers** - Document the three levels (llms-fetch + all, WebFetch all, specific domains)
 5. **Design skill interaction flow** - How many questions, what order, how to present tiers
 6. **Additional recommendations** - `additionalDirectories`, `defaultMode: "plan"`
+7. **Investigate directory access bug** - Why does acceptEdits mode prompt for directory access?
+8. **Command substitution guidance** - Add to CLAUDE.md recommendations to prefer simple commands
 
 ---
 
