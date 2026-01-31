@@ -251,7 +251,7 @@ Three tiers based on sensitivity of work:
 
 1. **`Bash(*)` deny as default** - Deny takes absolute priority, blocks everything
 2. **`Bash(env:*)`** - Security bypass, allows arbitrary command execution
-3. **xargs** - Same risk as find -exec, not worth the complexity
+3. **`Bash(xargs:*)`** - Security bypass, allows arbitrary command execution (see Experiment 8)
 
 ### Deferred Decisions
 
@@ -285,6 +285,17 @@ Commands to recommend allowing in the base tier:
 
 ### Paired Deny Rules
 - `Bash(find*-exec*)`
+- `Bash(do *)` - forces multiline loop syntax (with space, matches `do echo` but not bare `do`)
+
+### Never Allow (Bypass Vectors)
+- `Bash(env:*)` - allows arbitrary command execution
+- `Bash(xargs:*)` - allows arbitrary command execution
+
+### CLAUDE.md Recommendations
+- Avoid command substitution (`$()`, backticks) - causes parser to fall back to generic prompt
+- For bulk operations with xargs-whitelisted commands (wc, grep, cat, etc.), prefer xargs - avoids directory bug in loops
+- For bulk operations with non-whitelisted commands (export, python3, custom scripts), prefer multiline loops - xargs always prompts for these
+- Use multiline loop syntax (`do` on its own line) - single-line `do cmd` should be denied
 
 ---
 
@@ -341,6 +352,8 @@ echo $HOME
 
 **Implication:** Can recommend allowing `for:*`, `do`, `done` for users who need bash loops. Should also add guidance to prefer simple commands and avoid command substitution when possible (to get proper permission parsing).
 
+*See Experiment 9 for additional findings on `Bash(do *)` deny pattern and xargs comparison.*
+
 ---
 
 ### Experiment 7: Directory Access Prompt Bug (rm + glob)
@@ -363,7 +376,109 @@ echo $HOME
 
 **Prompt shown:** "Yes, and always allow access to agile-glow-5/ from this project"
 
+**Update:** This bug is broader - also affects for loops with file-reading commands (see Experiment 9). The pattern seems to be: complex bash syntax + commands that Claude Code's static analyzer tries to analyze for file access = spurious directory prompts that don't persist.
+
 **Status:** Bug to report to Claude Code team.
+
+---
+
+### Experiment 8: xargs Permission Bypass
+
+**Question:** Is `Bash(xargs:*)` a safe permission? How does Claude Code handle xargs?
+
+**Background:** Claude Code has special xargs handling - without any allow rules, xargs commands show a prompt offering "Yes, and don't ask again for `xargs` commands".
+
+**Test 1: Default behavior (no xargs permission)**
+
+| Command | Prompted? |
+|---------|-----------|
+| `echo "a b c" \| xargs echo` | No |
+| `echo "test.txt" \| xargs rm` | Yes |
+| `echo "FOO=bar" \| xargs export` | Yes (even though `export` alone is allowed) |
+| `echo "*.md" \| xargs grep -l "test"` | No |
+
+**Observation:** Claude Code parses through xargs to validate the target command, but applies stricter rules than normal command execution (export normally allowed, but not through xargs).
+
+**Test 2: With `Bash(xargs:*)` in allow list**
+
+| Command | Prompted? |
+|---------|-----------|
+| `echo "test.txt" \| xargs rm` | **No** - ran without prompt |
+
+**Conclusion:** `Bash(xargs:*)` is a **security bypass**. Allowing xargs is effectively `Bash(*)` because any command can be run through it. Similar to `env:*`, this bypasses command validation.
+
+**Recommendation for Claude behavior:** Claude should avoid using xargs (like command substitution) to prevent users from getting unnecessary prompts. Prefer explicit loops or other patterns.
+
+---
+
+### Experiment 9: For Loops vs xargs - Complementary Use Cases
+
+*Builds on Experiment 6 (for loop safety) and Experiment 7 (directory access bug).*
+
+**Questions:**
+1. Can we deny single-line `do` syntax while allowing multiline?
+2. Are loops and xargs complementary for different use cases?
+
+**Setup:**
+- Allow: `Bash(for:*)`, `Bash(do)`, `Bash(done)`, `Bash(echo:*)`, `Bash(wc:*)`, `Bash(cat:*)`, `Bash(head:*)`
+- Deny: `Bash(do *)`
+
+**Test 1: Denying single-line do syntax**
+
+| Command | Result |
+|---------|--------|
+| `for i in a b c; do echo $i; done` | ✗ Denied (matches `do echo`) |
+| Multiline with `do` on own line | ✓ Works |
+
+**Conclusion:** `Bash(do *)` (with space) successfully forces multiline loop syntax while allowing the `do` keyword on its own line.
+
+**Test 2: Loops with file-reading commands**
+
+| Scenario | Result |
+|----------|--------|
+| Loop with `echo` in body | ✓ Works |
+| Loop with `export` in body | ✓ Works |
+| Loop with `wc`, `cat`, `grep` in body | ✗ Prompts for directory access |
+| Glob in for list vs hardcoded list | Same behavior - both prompt |
+| Directory permission persists? | ✗ No - prompts again on next command |
+
+**Test 3: xargs with file-reading commands**
+
+| Command | Result |
+|---------|--------|
+| `echo "README.md CLAUDE.md" \| xargs wc -l` | ✓ Works (no directory prompt) |
+| `ls docs/*.md \| xargs wc -l` | ✓ Works (no directory prompt) |
+
+**Test 4: xargs with commands not in xargs's internal whitelist**
+
+| Command | Prompts? |
+|---------|----------|
+| `xargs echo` | No |
+| `xargs wc` | No |
+| `xargs grep` | No |
+| `xargs export` | Yes - "don't ask again for `xargs export`" |
+| `xargs python3 /tmp/claude-scripts/...` | Yes - "don't ask again for `xargs` commands" |
+
+**Observations & Uncertainties:**
+
+xargs appears to have an internal whitelist of commands that work without prompting. Commands outside this whitelist always prompt, even if allowed in settings.
+
+**Hypothesis (uncertain):** The xargs whitelist may be the same as the commands auto-approved in acceptEdits mode / commands Claude Code's static analyzer recognizes for file operations. We haven't confirmed this.
+
+**Conclusion:** xargs and loops are **complementary**:
+
+| Use Case | xargs | loop |
+|----------|-------|------|
+| xargs-whitelisted commands (echo, wc, grep, etc.) | ✓ Works | ✓ Works (non-file) / ✗ Directory bug (file) |
+| Non-whitelisted commands (export, python3, custom) | ✗ Always prompts | ✓ Works |
+
+**Hypothesis (uncertain):** The directory access bug occurs when Claude Code's static analyzer encounters complex bash syntax (loops, rm + glob) combined with commands it analyzes for file access. xargs may handle this differently. The exact trigger is unclear.
+
+**Recommendations:**
+1. **Deny `Bash(do *)`** - Forces multiline loop syntax (parseable)
+2. **Use xargs for whitelisted commands** when operating on multiple files - avoids directory bug
+3. **Use loops for non-whitelisted commands** - xargs always prompts for these
+4. **Never allow `Bash(xargs:*)`** - Security bypass vector
 
 ---
 
@@ -385,6 +500,7 @@ When Claude attempts to edit settings.local.json, the permission prompt includes
 6. **Additional recommendations** - `additionalDirectories`, `defaultMode: "plan"`
 7. **Investigate directory access bug** - Why does acceptEdits mode prompt for directory access?
 8. **Command substitution guidance** - Add to CLAUDE.md recommendations to prefer simple commands
+9. **xargs guidance** - Add to CLAUDE.md recommendations to avoid xargs (triggers stricter prompts)
 
 ---
 
