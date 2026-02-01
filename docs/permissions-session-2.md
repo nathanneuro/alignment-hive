@@ -135,7 +135,7 @@ Three tiers based on sensitivity of work:
 
 - Same tier as llms-fetch-mcp (Tier 1)
 - Deny POST/PUT/DELETE requests
-- Rationale: If Claude wants to send POST requests, writing a script in /tmp/claude-scripts is healthier (more explicit, user can review)
+- Rationale: If Claude wants to send POST requests, writing a script in /tmp/claude-execution-allowed is healthier (more explicit, user can review)
 
 ### Git/gh Permissions (Deferred)
 
@@ -166,21 +166,21 @@ Three tiers based on sensitivity of work:
 
 ---
 
-### Experiment 2: /tmp/claude-scripts Pattern
+### Experiment 2: /tmp/claude-execution-allowed Pattern
 
 **Question:** Can we create a permission boundary for one-off scripts that prompts once per session?
 
 **Setup:**
-- Allow: `Bash(python3 /tmp/claude-scripts/*)`
+- Allow: `Bash(python3 /tmp/claude-execution-allowed/*)`
 - No Write permission for /tmp
 
 **Test:**
-1. Write script to /tmp/claude-scripts/ → Prompted for session access ✓
+1. Write script to /tmp/claude-execution-allowed/ → Prompted for session access ✓
 2. Run script → Allowed (bash permission matched) ✓
 3. Edit script → No prompt (session access already granted) ✓
 4. Run in subdirectory → Allowed (single `*` works recursively) ✓
 
-**Conclusion:** Pattern works as intended. User gets prompted once per session when Claude first writes to /tmp/claude-scripts, then can work autonomously. **User explicitly liked this pattern.**
+**Conclusion:** Pattern works as intended. User gets prompted once per session when Claude first writes to /tmp/claude-execution-allowed, then can work autonomously. **User explicitly liked this pattern.**
 
 ---
 
@@ -230,7 +230,7 @@ Three tiers based on sensitivity of work:
 **Test 2:** `export FOO=bar && ls docs/`
 - Result: Ran successfully, no prompt ✓
 
-**Test 3:** `export TEST_VAR=hello && python3 /tmp/claude-scripts/print-env.py`
+**Test 3:** `export TEST_VAR=hello && python3 /tmp/claude-execution-allowed/print-env.py`
 - Script reads `os.environ.get('TEST_VAR')`
 - Result: Printed `TEST_VAR = hello` ✓
 
@@ -242,7 +242,7 @@ Three tiers based on sensitivity of work:
 
 ### Accepted Patterns
 
-1. **`/tmp/claude-scripts/*`** - One-off script location with session-scoped write access
+1. **`/tmp/claude-execution-allowed/*`** - One-off script location with session-scoped write access
 2. **`Bash(find:*)` + `Bash(find*-exec*)` deny** - Allow find, block dangerous -exec
 3. **`Bash(export:*)`** - Safe way to set env vars for subsequent commands via `&&` chaining
 4. **Selective deny patterns** - Can block dangerous subcommands while allowing base command
@@ -457,7 +457,7 @@ echo $HOME
 | `xargs wc` | No |
 | `xargs grep` | No |
 | `xargs export` | Yes - "don't ask again for `xargs export`" |
-| `xargs python3 /tmp/claude-scripts/...` | Yes - "don't ask again for `xargs` commands" |
+| `xargs python3 /tmp/claude-execution-allowed/...` | Yes - "don't ask again for `xargs` commands" |
 
 **Observations & Uncertainties:**
 

@@ -233,22 +233,22 @@ Bash(git commit *)
 
 **Tier 1 - Local scripts folder (arbitrary execution):**
 
-Scripts in `scripts/` within project directory. With acceptEdits mode, Claude has write access by default. **This enables arbitrary code execution** - Claude can write and run any script.
+Scripts in `claude-execution-allowed/` within project directory. With acceptEdits mode, Claude has write access by default. **This enables arbitrary code execution** - Claude can write and run any script.
 
 ```
-Bash(bun run scripts/*)              # npm/bun
-Bash(uv run scripts/*)               # Python
-Bash(bash scripts/*)                 # shell
+Bash(bun run claude-execution-allowed/*)    # npm/bun
+Bash(uv run claude-execution-allowed/*)     # Python
+Bash(bash claude-execution-allowed/*)       # shell
 ```
 
 **Tier 2 - Temp scripts folder (session-scoped):**
 
-Scripts in `/tmp/scripts/<project>/`. Claude prompts once per session for write access to /tmp, then can create and run scripts freely. Slightly safer than Tier 1 since user explicitly grants session access.
+Scripts in `/tmp/claude-execution-allowed/<project>/`. Claude prompts once per session for write access to /tmp, then can create and run scripts freely. Slightly safer than Tier 1 since user explicitly grants session access.
 
 ```
-Bash(bun /tmp/scripts/*)             # npm/bun
-Bash(uv run /tmp/scripts/*)          # Python
-Bash(bash /tmp/scripts/*)            # shell
+Bash(bun /tmp/claude-execution-allowed/*)             # npm/bun
+Bash(uv run /tmp/claude-execution-allowed/*)          # Python
+Bash(bash /tmp/claude-execution-allowed/*)            # shell
 ```
 
 **Tier 3 - Blessed scripts only:**
@@ -258,6 +258,8 @@ Only enumerate specific scripts from package.json/pyproject.toml. No ad-hoc scri
 **Tier 4 - No script execution:**
 
 No script allows beyond package manager commands. Most restrictive - Claude cannot run any project scripts directly.
+
+**Future:** Deno would be ideal for sandboxed scripting (no permissions by default, granular `--allow-*` flags).
 
 ### Q3: Web Access
 
@@ -345,12 +347,104 @@ The best-practices skill should ask these questions (can't be determined from fi
 
 ---
 
-## Topics for Future Sessions
+## Experiment Results (Session 3 Amendment)
 
-1. **Edit and Read permissions** - Adding sensitive files (package.json, critical scripts) to ask
-2. **`Bash(cat)` deny** - Narrowly deny `cat` without wildcard to prevent file creation (should use Write tool)
-3. **Sandboxed scripting** - Research runtimes with good sandboxing or no network access by default for safer general scripting
-4. **Complex bash via scripts** - For complex bash needs, recommend writing to tmp scripts folder rather than dealing with messy bash permissions
+### Experiment: `Bash(cat)` Deny Pattern
+
+**Question:** Can we deny `cat` (bare command) to prevent file creation via redirection while still allowing `cat file.txt`?
+
+**Setup:**
+- Allow: `Bash(cat:*)`
+- Deny: `Bash(cat)` (no wildcard)
+
+**Results:**
+
+| Command | Result |
+|---------|--------|
+| `cat README.md` | ✓ Allowed (matches `cat:*` allow) |
+| `echo "test" \| cat > file.txt` | ✓ Denied (matches bare `cat` deny) |
+| `cat > file.txt << 'EOF'...EOF` | ✗ Generic prompt (heredoc too complex for parser) |
+
+**Additional patterns tested (none worked for heredoc):**
+- `Bash(cat >*)` - no effect
+- `Bash(cat*<<*)` - no effect
+- `Bash('EOF')` - no effect
+- `Bash(cat )` (trailing space) - no effect
+
+**Conclusion:** `Bash(cat)` deny catches piped redirects where the parser falls back to the bare command, but heredocs are too complex for the parser and fall through to generic prompts. Workaround: Add CLAUDE.md guidance to use Write tool instead of cat redirects/heredocs.
+
+**Recommendation:** Add to deny list:
+```
+Bash(cat)                      # catches simple redirect bypasses
+```
+
+Add to CLAUDE.md:
+> Use the Write tool for creating files. Avoid `cat` with redirects or heredocs.
+
+---
+
+### Experiment: Edit/Read Ask and Deny Permissions
+
+**Question:** Can we use ask/deny permissions for Edit and Read tools to protect sensitive files?
+
+**Setup:**
+- Ask: `Edit(package.json)`, `Edit(**/package.json)`
+- Deny: `Read(**/.env*)`
+
+**Results:**
+
+| Rule | Test | Result |
+|------|------|--------|
+| `Edit(package.json)` ask | Edit root package.json | ✓ Prompted (even in acceptEdits mode) |
+| `Edit(**/package.json)` ask | Edit web/package.json | ✓ Prompted |
+| `Read(**/.env*)` deny | Read .env.test | ✓ Denied |
+| `Read(**/.env*)` deny | Read web/.env.test | ✓ Denied |
+
+**Note:** Had a debugging issue where duplicate `deny` arrays in JSON caused rules to be ignored - only the last `deny` array is used.
+
+**Conclusion:** Edit and Read permissions support glob patterns (`**` for recursive). Can use:
+- `ask` for files that sometimes need editing (package.json, critical configs)
+- `deny` for files that should never be accessed (.env, credentials)
+
+Denying Read also blocks Edit (can't edit what you can't read), so only `Read` deny is needed for secrets.
+
+**Recommendation:** Add to permission sets:
+```
+# ASK - sensitive project files
+Edit(package.json)
+Edit(**/package.json)
+
+# DENY - secrets and credentials (Read deny also blocks Edit)
+Read(**/.env*)
+Read(**/*credentials*)
+Read(**/*secret*)
+```
+
+---
+
+### Experiment: Session-Scoped Ask Permissions
+
+**Question:** If we use an ask rule for a folder and grant "allow all edits during this session", does it persist?
+
+**Setup:**
+- Created `claude-execution-allowed/` folder
+- Added `Edit(claude-execution-allowed/**)` to ask list
+
+**Results:**
+
+| Action | Result |
+|--------|--------|
+| First write to folder | ✓ Prompted with "allow all edits during this session" option |
+| User selects session option | ✓ File created |
+| Second edit to same folder | ✗ Still prompts! |
+
+**Conclusion:** The "allow all edits during this session" option for ask rules does NOT persist. Each edit still prompts.
+
+This confirms the `/tmp/claude-execution-allowed/` pattern from Session 2 is still needed - it works because it relies on the **directory access** prompt (which does persist), not the ask rule prompt.
+
+**Recommendation:** For session-scoped script execution:
+- Use `/tmp/claude-execution-allowed/<project>/` pattern (prompts once for /tmp write access)
+- Or use a project-local `claude-execution-allowed/` folder with allow rules (always allowed, no prompt)
 
 ---
 
