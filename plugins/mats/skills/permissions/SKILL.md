@@ -42,11 +42,13 @@ Detect the project type automatically before asking questions. The goal is to:
 
 **Package manager:** Check for lock files (bun.lockb, pnpm-lock.yaml, yarn.lock, package-lock.json, uv.lock, Cargo.lock). If ambiguous, ask the user.
 
-**Scripts:** Extract script names from `package.json` scripts, `pyproject.toml` scripts, or similar config. These will be allowed individually - not all package manager calls.
+**Scripts:** Extract script names from `package.json` scripts, `pyproject.toml` scripts, or similar config. These will be allowed individually - not all package manager calls. For monorepos, scripts may only exist in specific workspaces - identify the correct invocation pattern (e.g., `bun run --filter <workspace> <script>`).
 
 **MCP servers:** Check `.mcp.json` for configured servers.
 
-If it's unclear how to run commands in this project (e.g., Python project without pyproject.toml), ask the user about their preferred toolchain.
+**hive-mind plugin:** If the `hive-mind:retrieval` subagent is available, include hive-mind commands in the universal safe commands (see Chunk 1 for the full list).
+
+If it's unclear how to run commands in this project (e.g., Python project without pyproject.toml, unusual monorepo structure), ask the user about their preferred toolchain and the correct way to run scripts.
 
 ---
 
@@ -163,7 +165,13 @@ Fix each issue individually - the user might have niche permissions they want to
 
 ## Step 4: Generate Settings
 
-Make edits in logical chunks. Provide brief reasoning before each chunk so the user understands what's being added.
+Make edits in logical chunks with **separate Edit tool calls** for each chunk. This allows the user to review and approve each category independently. Provide brief reasoning before each chunk so the user understands what's being added.
+
+**What to copy verbatim vs. adapt:**
+- **Verbatim:** Chunk 1 (Universal Safe Commands), Chunk 3 (Git), Chunk 7 (Default Mode)
+- **Mostly standard:** Chunk 5 (Web Access) - structure is standard, just pick the right option
+- **Adapt paths/runtime:** Chunk 4 (Script Execution) - adapt project name, paths, and runtime (`uv run`, `bun`, `python3`, etc.)
+- **Requires judgment:** Chunk 2 (Project-Specific Commands) - must match actual scripts and invocation patterns; Chunk 6 (Secret Protection) - must check what secret files actually exist in the project
 
 ### Chunk 1: Universal Safe Commands
 
@@ -172,6 +180,13 @@ Reasoning: "Adding read-only inspection commands and safe utilities..."
 These are the universal safe commands. Note the wildcard patterns:
 - `cmd*` for commands commonly used without arguments
 - `cmd *` for commands that always need arguments
+
+If hive-mind plugin is detected (see Step 1), also include these in the allow list:
+- `Bash(hive-mind)` - no arguments, shows help
+- `Bash(hive-mind read)` - shows read subcommand help
+- `Bash(hive-mind read *)`
+- `Bash(hive-mind search)` - shows search subcommand help
+- `Bash(hive-mind search *)`
 
 ```json
 {
@@ -294,7 +309,7 @@ These are the universal safe commands. Note the wildcard patterns:
 
 ### Chunk 2: Project-Specific Commands
 
-Based on detected package manager, add commands for enumerated scripts. These are examples - adapt to the actual project structure and user preferences.
+Based on detected package manager, add commands for enumerated scripts. These are **examples** - you must adapt to the actual project structure, scripts, and invocation patterns.
 
 **Example for bun project with scripts: dev, build, test, lint, format, typecheck:**
 
@@ -590,7 +605,9 @@ Example for a Python ML project:
 
 Reasoning: "Adding protection for sensitive files..."
 
-Decide dynamically based on the project's actual secret files. Common patterns:
+**Important:** Actually check what secret files exist in the project - don't use a generic list. Look for `.env*` files, credentials, keys, etc. Only block files that actually exist or are likely to be created.
+
+Common patterns (adapt to what you find):
 
 ```json
 {
@@ -598,7 +615,6 @@ Decide dynamically based on the project's actual secret files. Common patterns:
     "deny": [
       "Read(**/.env)",
       "Read(**/.env.local)",
-      "Read(**/.env.production)",
       "Read(**/.envrc)"
     ]
   }
@@ -607,7 +623,7 @@ Decide dynamically based on the project's actual secret files. Common patterns:
 
 Note: `.env.example` and `.env.test` are typically safe to read - don't block those unless they contain real secrets.
 
-For projects with credentials files:
+For projects with credentials files (if present):
 ```json
 {
   "permissions": {
@@ -626,9 +642,13 @@ For projects with credentials files:
 
 Reasoning: "Setting plan mode as the default..."
 
+Note: `defaultMode` must be inside the `permissions` object.
+
 ```json
 {
-  "defaultMode": "plan"
+  "permissions": {
+    "defaultMode": "plan"
+  }
 }
 ```
 
@@ -653,12 +673,12 @@ Servers left on default ask don't need any configuration.
 
 ## Step 5: Add CLAUDE.md Section
 
-Add a "## Bash Commands" section to CLAUDE.md. Content varies by script execution preference and project type.
+Add a section to CLAUDE.md with command execution guidance. Use a heading that fits the project - "## Running Commands", "## Scripts and Commands", or similar. Content varies by script execution preference and project type.
 
 ### For Local scripts folder (claude-execution-allowed/)
 
 ```markdown
-## Bash Commands
+## Running Commands
 
 Run scripts via `[package-manager] run <script>`. Available scripts: [list enumerated scripts].
 
@@ -689,7 +709,7 @@ If a command that should be allowed is denied, or if project structure changes s
 ### For Temp scripts folder (/tmp/claude-execution-allowed/)
 
 ```markdown
-## Bash Commands
+## Running Commands
 
 Run scripts via `[package-manager] run <script>`. Available scripts: [list enumerated scripts].
 
@@ -722,7 +742,7 @@ If a command that should be allowed is denied, or if project structure changes s
 For this tier, don't include script-related content. Only include the basic bash operations section:
 
 ```markdown
-## Bash Commands
+## Running Commands
 
 **Bash operations:**
 
@@ -747,7 +767,7 @@ If a command that should be allowed is denied, or if project structure changes s
 ### For Blessed scripts only
 
 ```markdown
-## Bash Commands
+## Running Commands
 
 Run scripts via `[package-manager] run <script>`. Available scripts: [list enumerated scripts].
 

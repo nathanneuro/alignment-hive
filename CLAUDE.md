@@ -68,3 +68,30 @@ Use [uv](https://docs.astral.sh/uv/) with inline dependencies (PEP 723). Run scr
 ## hive-mind Session Files
 
 The `.claude/hive-mind/sessions/` directory contains extracted session data. These files are gitignored.
+
+## Running Commands
+
+Run scripts via `bun run --filter <workspace> <script>`. Available scripts vary by workspace - see "Running Scripts" section above.
+
+**Ad-hoc scripts:** Only `/tmp/claude-execution-allowed/alignment-hive/` is approved for ad-hoc scripts. Write scripts there and run with `bun /tmp/claude-execution-allowed/alignment-hive/<script-name>` or `bash /tmp/claude-execution-allowed/alignment-hive/<script-name>`. Scripts can be JavaScript/TypeScript or bash depending on the task. For bash scripts, make them executable first with `chmod +x`.
+
+**Bash operations:**
+
+Complex bash syntax is hard for Claude Code to permission correctly. Keep commands simple.
+
+Simple operations are fine: `|`, `||`, `&&`, `>` redirects.
+
+For bulk operations on multiple files, use xargs:
+- Plain: `ls *.md | xargs wc -l`
+- With placeholder: `ls *.md | xargs -I{} head -1 {}`
+
+For string interpolation (`$()`, backticks, `${}`), heredocs, loops, or advanced xargs flags (`-P`, `-L`, `-n`), write a script in `/tmp/claude-execution-allowed/alignment-hive/` instead.
+
+**Patterns:**
+- File creation: Write tool, not `cat << 'EOF' > file`
+- Env vars: `export VAR=val && command`, not `VAR=val command` or `env VAR=val command`
+- Bulk operations: `ls *.md | xargs wc -l`, not `for f in *.md; do cmd "$f"; done`
+- Parallel/batched xargs: script, not `xargs -P4` or `xargs -L1`
+- Per-item shell logic: script, not `xargs sh -c '...'`
+
+If a command that should be allowed is denied, or if project structure changes significantly, ask about running `/mats:permissions` to update settings.
