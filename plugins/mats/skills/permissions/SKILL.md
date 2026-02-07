@@ -293,7 +293,8 @@ If hive-mind plugin is detected, also include:
       "Bash(xargs -I{} sh *)",
       "Bash(xargs bash *)",
       "Bash(xargs -I{} bash *)",
-      "Bash(cat)"
+      "Bash(cat)",
+      "Bash(git -C *)"
     ]
   }
 }
@@ -322,6 +323,7 @@ Avoid string interpolation (`$()`, backticks, `${}`), heredocs, loops, and advan
 - Bulk operations: `ls *.md | xargs wc -l`, not `for f in *.md; do cmd "$f"; done`
 - Parallel/batched xargs: use scripts, not `xargs -P4` or `xargs -L1`
 - Per-item shell logic: use scripts, not `xargs sh -c '...'`
+- Git: `git <command>`, not `git -C <path> <command>` (breaks permissions)
 
 If a command that should be allowed is denied, or if project structure changes significantly, ask about running `/mats:permissions` to update settings.
 ```
@@ -334,7 +336,7 @@ If a command that should be allowed is denied, or if project structure changes s
 
 Use the context answers to determine the recommended option:
 
-| Valuable data? | Autonomy important? | Recommend |
+| Hard to undo? | Autonomy important? | Recommend |
 |----------------|---------------------|-----------|
 | Yes | Yes | Temp folder scripts |
 | Yes | No | Project scripts only |
@@ -533,7 +535,7 @@ Add to whichever file corresponds to where script permissions were stored.
 
 Run scripts via `[package-manager] run <script>`. Available scripts: [list enumerated scripts].
 
-Bash scripts go in `[scripts/]` and run with `bash [scripts/]<script-name>`.
+Non-bash scripts run with `[package-manager] run [scripts/]<script-name>`. Bash scripts run with `bash [scripts/]<script-name>`.
 
 For string interpolation, heredocs, loops, or advanced xargs flags, write a script in `[scripts/]` instead.
 ```
@@ -545,7 +547,7 @@ For string interpolation, heredocs, loops, or advanced xargs flags, write a scri
 
 Run scripts via `[package-manager] run <script>`. Available scripts: [list enumerated scripts].
 
-**Ad-hoc scripts:** Only `/tmp/claude-execution-allowed/[project-name]/` is approved for ad-hoc scripts. Write scripts there and run with `[uv run/bun run/bash] /tmp/claude-execution-allowed/[project-name]/<script-name>`. Scripts can be Python, JavaScript, or bash depending on the task.
+**Ad-hoc scripts:** Only `/tmp/claude-execution-allowed/[project-name]/` is approved for ad-hoc scripts. Non-bash scripts run with `[package-manager] run /tmp/claude-execution-allowed/[project-name]/<script-name>`. Bash scripts run with `bash /tmp/claude-execution-allowed/[project-name]/<script-name>`.
 
 When you create a new reusable script, offer to add a permission for it. Example: "I created scripts/analyze.py. Want me to add `Bash(uv run scripts/analyze.py *)` to your permissions?"
 

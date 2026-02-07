@@ -74,7 +74,7 @@ The `.claude/hive-mind/sessions/` directory contains extracted session data. The
 
 Run scripts via `bun run --filter <workspace> <script>`. Available scripts vary by workspace - see "Running Scripts" section above.
 
-**Ad-hoc scripts:** Only `/tmp/claude-execution-allowed/alignment-hive/` is approved for ad-hoc scripts. Write scripts there and run with `bun /tmp/claude-execution-allowed/alignment-hive/<script-name>` or `bash /tmp/claude-execution-allowed/alignment-hive/<script-name>`. Scripts can be JavaScript/TypeScript or bash depending on the task. For bash scripts, make them executable first with `chmod +x`.
+**Ad-hoc scripts:** Only `/tmp/claude-execution-allowed/alignment-hive/` is approved for ad-hoc scripts. JavaScript/TypeScript scripts run with `bun run /tmp/claude-execution-allowed/alignment-hive/<script-name>`. Bash scripts run with `bash /tmp/claude-execution-allowed/alignment-hive/<script-name>`.
 
 **Bash operations:**
 
@@ -94,5 +94,6 @@ For string interpolation (`$()`, backticks, `${}`), heredocs, loops, or advanced
 - Bulk operations: `ls *.md | xargs wc -l`, not `for f in *.md; do cmd "$f"; done`
 - Parallel/batched xargs: script, not `xargs -P4` or `xargs -L1`
 - Per-item shell logic: script, not `xargs sh -c '...'`
+- Git: `git <command>`, not `git -C <path> <command>` (breaks permissions)
 
 If a command that should be allowed is denied, or if project structure changes significantly, ask about running `/mats:permissions` to update settings.
