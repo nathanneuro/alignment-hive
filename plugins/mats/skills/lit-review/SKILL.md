@@ -164,11 +164,17 @@ Note: Google Scholar may fail due to rate limiting—this is expected.
 
 **LessWrong and Alignment Forum:**
 
-For LW/AF posts, use the WebSearch tool directly. Keep it brief for Stage 1—just 1-2 searches to get a sense of the relevant terminology:
+Search for LW/AF posts using the WebSearch tool. Keep it brief for Stage 1—just 1-2 searches per platform:
 
 ```
 site:lesswrong.com [main query]
+site:alignmentforum.org [main query]
 ```
+
+**Important notes on LW/AF cross-posting:**
+- Posts are often cross-posted to both LessWrong and Alignment Forum. The post content is identical, but **comments may differ** between platforms. Famous researchers sometimes post important insights in comments.
+- Collect URLs from both platforms. The fetch script deduplicates by post ID (same post on LW and AF shares the same ID).
+- All content is fetched through LessWrong's API, which serves both platforms. Comments from both LW and AF are returned together.
 
 Collect the URLs (aim for ~5-10 posts) and save them to `<output_dir>/raw_results/lesswrong_urls.json` as a JSON array:
 
@@ -179,13 +185,20 @@ Collect the URLs (aim for ~5-10 posts) and save them to `<output_dir>/raw_result
 ]
 ```
 
-Then fetch full content (including comments) via GraphQL:
+Then fetch full content (posts + comments) using the scraper. This uses the LW GraphQL API as the primary method, with HTML page scraping as a fallback:
 
 ```bash
 uv run ${CLAUDE_PLUGIN_ROOT}/scripts/lit-review/fetch_lesswrong.py \
   --urls <output_dir>/raw_results/lesswrong_urls.json \
   --output <output_dir>/raw_results/lesswrong.json
 ```
+
+The scraper:
+- Fetches full post HTML content and metadata via GraphQL
+- Collects up to 500 comments per post (with author, score, threading)
+- Falls back to HTML page scraping if GraphQL fails
+- Uses a browser User-Agent to avoid blocks
+- Handles both LW and AF URLs through the same endpoint
 
 <!--
 INTERNAL NOTES FOR FUTURE CLAUDES - Exa Search API:
@@ -227,7 +240,7 @@ uv run ${CLAUDE_PLUGIN_ROOT}/scripts/lit-review/dedup_papers.py \
 
 ### Phase 4: Download and Convert PDFs
 
-Create the papers directory and run download/conversion:
+Create the papers directory and run download/conversion. **PDF-to-markdown conversion is parallelized** across multiple threads for speed:
 
 ```bash
 mkdir -p <output_dir>/papers
@@ -239,8 +252,11 @@ uv run ${CLAUDE_PLUGIN_ROOT}/scripts/lit-review/download_pdfs.py \
 uv run ${CLAUDE_PLUGIN_ROOT}/scripts/lit-review/pdf_to_markdown.py \
   --input-dir <output_dir>/papers/ \
   --output-dir <output_dir>/papers/ \
-  --ascii-width 60
+  --ascii-width 60 \
+  --workers 8
 ```
+
+The `--workers` flag controls parallelism (default: 8 threads). Increase for faster conversion on machines with more cores.
 
 ### Phase 5: Process LessWrong/AF Posts
 
@@ -348,15 +364,16 @@ uv run ${CLAUDE_PLUGIN_ROOT}/scripts/lit-review/run_searches.py \
 
 **LessWrong and Alignment Forum (comprehensive):**
 
-Now do thorough LW/AF searches with all refined queries:
+Now do thorough LW/AF searches with all refined queries. Search both platforms since comments differ:
 ```
 site:lesswrong.com [refined query 1]
 site:lesswrong.com [refined query 2]
 site:alignmentforum.org [refined query 1]
+site:alignmentforum.org [refined query 2]
 ...
 ```
 
-Collect all URLs and fetch via `fetch_lesswrong.py` as in Stage 1.
+Collect all URLs into `<output_dir>/raw_results_stage2/lesswrong_urls.json` and fetch via `fetch_lesswrong.py` as in Stage 1. The scraper deduplicates by post ID, so cross-posted URLs won't be fetched twice.
 
 ### Phase 11: Merge and Deduplicate
 
