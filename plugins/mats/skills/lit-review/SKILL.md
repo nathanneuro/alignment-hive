@@ -185,7 +185,7 @@ Collect the URLs (aim for ~5-10 posts) and save them to `<output_dir>/raw_result
 ]
 ```
 
-Then fetch full content (posts + comments) using the scraper. This uses the LW GraphQL API as the primary method, with HTML page scraping as a fallback:
+Then fetch full content (posts + comments) using the scraper via the LW GraphQL API:
 
 ```bash
 uv run ${CLAUDE_PLUGIN_ROOT}/scripts/lit-review/fetch_lesswrong.py \
@@ -196,8 +196,6 @@ uv run ${CLAUDE_PLUGIN_ROOT}/scripts/lit-review/fetch_lesswrong.py \
 The scraper:
 - Fetches full post HTML content and metadata via GraphQL
 - Collects up to 500 comments per post (with author, score, threading)
-- Falls back to HTML page scraping if GraphQL fails
-- Uses a browser User-Agent to avoid blocks
 - Handles both LW and AF URLs through the same endpoint
 
 <!--

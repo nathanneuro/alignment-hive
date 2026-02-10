@@ -1,12 +1,9 @@
 # /// script
 # requires-python = ">=3.11"
-# dependencies = ["httpx", "beautifulsoup4"]
+# dependencies = ["httpx"]
 # ///
 """
-Fetch full content from LessWrong/Alignment Forum URLs.
-
-Primary method: GraphQL API (fast, structured data with comments).
-Fallback: HTML page scraping (slower, may not include comments).
+Fetch full content from LessWrong/Alignment Forum URLs via GraphQL API.
 
 All requests go through lesswrong.com - AF posts are a subset of LW's database,
 so the LW endpoint serves both. Posts cross-posted to both platforms share the
@@ -24,7 +21,6 @@ import sys
 from pathlib import Path
 
 import httpx
-from bs4 import BeautifulSoup
 
 GRAPHQL_URL = "https://www.lesswrong.com/graphql"
 
@@ -183,68 +179,6 @@ async def fetch_post_graphql(client: httpx.AsyncClient, post_id: str) -> dict | 
     return None
 
 
-async def fetch_post_html(client: httpx.AsyncClient, url: str) -> dict | None:
-    """Fallback: scrape post content from the HTML page.
-
-    LessWrong does server-side rendering, so the post body is in the HTML.
-    Comments are harder to extract from HTML, so this fallback may not include them.
-    """
-    for attempt in range(3):
-        try:
-            resp = await client.get(url, timeout=30.0, follow_redirects=True)
-            resp.raise_for_status()
-            html = resp.text
-
-            soup = BeautifulSoup(html, "html.parser")
-
-            # Extract title
-            title = None
-            og_title = soup.find("meta", property="og:title")
-            if og_title:
-                title = og_title.get("content", "").replace(" — LessWrong", "").replace(" - LessWrong", "")
-            if not title:
-                h1 = soup.find("h1")
-                title = h1.get_text(strip=True) if h1 else "Untitled"
-
-            # Extract post body - look for the content div
-            content_div = soup.find("div", class_=re.compile(r"PostsPage-postContent"))
-            html_content = str(content_div) if content_div else ""
-
-            # Extract author from meta
-            author = None
-            author_link = soup.find("a", class_=re.compile(r"UsersNameDisplay"))
-            if author_link:
-                author = author_link.get_text(strip=True)
-
-            # Extract date
-            posted_at = None
-            date_el = soup.find("meta", property="article:published_time")
-            if date_el:
-                posted_at = date_el.get("content")
-
-            return {
-                "_id": extract_post_id_from_url(url),
-                "title": title,
-                "slug": url.rstrip("/").split("/")[-1] if "/posts/" in url else None,
-                "pageUrl": url,
-                "postedAt": posted_at,
-                "baseScore": None,
-                "voteCount": None,
-                "commentCount": None,
-                "contents": {"html": html_content} if html_content else None,
-                "user": {"displayName": author, "username": None},
-                "tags": [],
-                "_scraped_from_html": True,
-            }
-        except Exception as e:
-            if attempt == 2:
-                print(f"  HTML scraping failed after 3 attempts: {e}", file=sys.stderr)
-                return None
-            await asyncio.sleep(2**attempt)
-
-    return None
-
-
 def format_post_result(post: dict, source: str, url: str, comments: list[dict]) -> dict:
     """Format a post result into the standard output format."""
     return {
@@ -273,7 +207,7 @@ def format_post_result(post: dict, source: str, url: str, comments: list[dict]) 
             }
             for c in comments
         ],
-        "fetched_via": "html_scraping" if post.get("_scraped_from_html") else "graphql",
+        "fetched_via": "graphql",
     }
 
 
@@ -299,30 +233,18 @@ async def fetch_all_posts(urls: list[dict]) -> list[dict]:
             # Try GraphQL first (returns structured data with metadata)
             post = await fetch_post_graphql(client, post_id)
 
-            if post:
-                # Fetch comments via GraphQL
-                comments = []
-                comment_count = post.get("commentCount", 0)
-                if comment_count > 0:
-                    print(f"  Fetching {comment_count} comments...", file=sys.stderr)
-                    comments = await fetch_comments(client, post["_id"])
-                    print(f"  Got {len(comments)} comments", file=sys.stderr)
+            if not post:
+                print(f"  GraphQL failed for {url}", file=sys.stderr)
+                continue
 
-                results.append(format_post_result(post, source, url, comments))
-            else:
-                # Fall back to HTML scraping
-                print(f"  GraphQL failed, trying HTML scraping...", file=sys.stderr)
-                # Use the LW URL for scraping (AF URLs may redirect)
-                scrape_url = f"https://www.lesswrong.com/posts/{post_id}"
-                post = await fetch_post_html(client, scrape_url)
+            comments = []
+            comment_count = post.get("commentCount", 0)
+            if comment_count > 0:
+                print(f"  Fetching {comment_count} comments...", file=sys.stderr)
+                comments = await fetch_comments(client, post["_id"])
+                print(f"  Got {len(comments)} comments", file=sys.stderr)
 
-                if post:
-                    print(f"  HTML scraping succeeded (comments may be incomplete)", file=sys.stderr)
-                    # Try to get comments via GraphQL even if post came from HTML
-                    comments = await fetch_comments(client, post_id)
-                    results.append(format_post_result(post, source, url, comments))
-                else:
-                    print(f"  Both GraphQL and HTML scraping failed for {url}", file=sys.stderr)
+            results.append(format_post_result(post, source, url, comments))
 
             await asyncio.sleep(0.3)
 
@@ -359,11 +281,8 @@ def main():
     with open(args.output, "w") as f:
         json.dump(results, f, indent=2)
 
-    graphql_count = sum(1 for r in results if r.get("fetched_via") == "graphql")
-    html_count = sum(1 for r in results if r.get("fetched_via") == "html_scraping")
     total_comments = sum(len(r.get("comments", [])) for r in results)
     print(f"\nSaved {len(results)} posts to {args.output}", file=sys.stderr)
-    print(f"  GraphQL: {graphql_count}, HTML scraping: {html_count}", file=sys.stderr)
     print(f"  Total comments collected: {total_comments}", file=sys.stderr)
 
 
