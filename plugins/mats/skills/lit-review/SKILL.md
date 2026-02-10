@@ -5,7 +5,7 @@ description: Generate comprehensive literature review from research proposal. Us
 
 # Literature Review Generator
 
-Generate a comprehensive literature review for AI safety research. This skill walks you through the process step by step.
+Generate a comprehensive literature review on any research topic. This skill walks you through the process step by step. While it includes LessWrong and Alignment Forum as sources (useful for AI safety research), it works equally well for any field — the academic search engines (arXiv, Semantic Scholar, Google Scholar) cover all disciplines.
 
 ---
 
@@ -17,7 +17,7 @@ Explain to the user what this skill does:
 >
 > 1. **Setup** - We'll create a folder for your lit review outputs
 > 2. **Research focus** - You'll tell me about your research topic (or I can help you develop one)
-> 3. **Automated search** - I'll search academic databases, arXiv, and AI safety forums
+> 3. **Automated search** - I'll search academic databases, arXiv, and relevant forums
 > 4. **Processing** - I'll download papers, remove duplicates, and summarize each one
 > 5. **Report** - You'll get a catalog of papers and a curated top-10 report
 >
@@ -132,9 +132,9 @@ Save queries to `<output_dir>/search_terms.json` as a JSON array of strings.
 Example format:
 ```json
 [
-  "AI alignment interpretability",
-  "mechanistic interpretability transformer",
-  "neural network feature visualization safety"
+  "main research question keywords",
+  "specific method or technique name",
+  "related concept from adjacent field"
 ]
 ```
 
@@ -449,6 +449,10 @@ Summarize:
 - Total papers found and summarized across all stages
 - Search term evolution across stages
 - Any issues encountered
+
+## Style Notes
+
+- **Do not pipe content into `python -c "..."`** for ad-hoc processing. This produces long, hard-to-read commands that make users nervous. If you need to do data manipulation beyond what the provided scripts handle, write a small temporary script file, run it, then delete it.
 
 ## Error Handling
 
