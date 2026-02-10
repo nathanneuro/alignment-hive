@@ -36,8 +36,10 @@ Install the mats plugin (recommended for MATS fellows):
 ```
 
 The mats plugin includes:
-- **project-setup** - Guidance for starting new projects with good architecture decisions
+- **best-practices** - Guided setup for documentation, plugins, tooling, and permissions
 - **fellow-handbook** - Quick lookup of MATS policies, compute access, housing, and program logistics
+- **permissions** - Configure Claude Code permissions to reduce permission prompts
+- **lit-review** - Automated literature review with paper search and summarization
 
 Also available:
 ```

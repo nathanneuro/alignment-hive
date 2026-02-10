@@ -55,6 +55,11 @@ Plugin locations:
 - `plugins/mats/.claude-plugin/plugin.json`
 - `plugins/llms-fetch-mcp/.claude-plugin/plugin.json`
 
+For the mats plugin specifically:
+- **Minor version bump** (e.g., 0.1.x → 0.2.0): New best practices content - users will be prompted to review
+- **Patch version bump** (e.g., 0.1.9 → 0.1.10): Bug fixes, typos, or other changes - users won't be re-prompted
+- **Update README.md** when adding or significantly changing mats plugin skills/commands
+
 **Auto-expanding bash commands fail hard.** If `!`command`` returns non-zero, the entire skill/agent/command fails to load. Use fallbacks like `command 2>/dev/null || echo "fallback"`.
 
 ## Python
@@ -64,3 +69,31 @@ Use [uv](https://docs.astral.sh/uv/) with inline dependencies (PEP 723). Run scr
 ## hive-mind Session Files
 
 The `.claude/hive-mind/sessions/` directory contains extracted session data. These files are gitignored.
+
+## Running Commands
+
+Run scripts via `bun run --filter <workspace> <script>`. Available scripts vary by workspace - see "Running Scripts" section above.
+
+**Ad-hoc scripts:** Only `/tmp/claude-execution-allowed/alignment-hive/` is approved for ad-hoc scripts. JavaScript/TypeScript scripts run with `bun run /tmp/claude-execution-allowed/alignment-hive/<script-name>`. Bash scripts run with `bash /tmp/claude-execution-allowed/alignment-hive/<script-name>`.
+
+**Bash operations:**
+
+Complex bash syntax is hard for Claude Code to permission correctly. Keep commands simple.
+
+Simple operations are fine: `|`, `||`, `&&`, `>` redirects.
+
+For bulk operations on multiple files, use xargs:
+- Plain: `ls *.md | xargs wc -l`
+- With placeholder: `ls *.md | xargs -I{} head -1 {}`
+
+For string interpolation (`$()`, backticks, `${}`), heredocs, loops, or advanced xargs flags (`-P`, `-L`, `-n`), write a script in `/tmp/claude-execution-allowed/alignment-hive/` instead.
+
+**Patterns:**
+- File creation: Write tool, not `cat << 'EOF' > file`
+- Env vars: `export VAR=val && command`, not `VAR=val command` or `env VAR=val command`
+- Bulk operations: `ls *.md | xargs wc -l`, not `for f in *.md; do cmd "$f"; done`
+- Parallel/batched xargs: script, not `xargs -P4` or `xargs -L1`
+- Per-item shell logic: script, not `xargs sh -c '...'`
+- Git: `git <command>`, not `git -C <path> <command>` (breaks permissions)
+
+If a command that should be allowed is denied, or if project structure changes significantly, ask about running `/mats:permissions` to update settings.

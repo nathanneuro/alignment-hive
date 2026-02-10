@@ -82,6 +82,22 @@ Consider modern tooling where appropriate:
 
 If a tool would be useful and isn't installed, ask if the user would like to install it.
 
+### Permissions (Highly Recommended)
+
+Proper permission configuration lets Claude work autonomously without compromising security. Essential for running Claude asynchronously without `--dangerously-skip-permissions` mode.
+
+**Detection:** Check `.claude/settings.json` and `.claude/settings.local.json`. Permissions are properly configured only if ALL of these conditions are met:
+- At least 15 allow rules total
+- At least 3 deny rules
+- Has safe commands like `Bash(ls*)`, `Bash(cat *)`, `Bash(grep *)`
+- Has xargs variants like `Bash(xargs cat*)`, `Bash(xargs -I{} head *)`
+- Has deny patterns like `Bash(for *)`, `Bash(timeout *)`
+- Has project-specific commands if applicable (e.g., `Bash(bun run dev)` for bun projects)
+
+If ANY condition fails, offer to set up permissions.
+
+**Action:** If the user agrees to configure permissions, invoke `/mats:permissions`. The user can agree in free text - they don't need to run the command themselves.
+
 ## Guidance by Project Type
 
 ### New Projects
