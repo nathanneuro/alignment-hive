@@ -64,7 +64,7 @@ export const hook = {
 export const errors = {
   schemaError: (path: string, error: string): string => `Schema error in ${path}: ${error}`,
   authSchemaError: (error: string): string => `Auth data schema error: ${error}`,
-  refreshSchemaError: (error: string): string => `Token refresh response schema error: ${error}`,
+  refreshFailed: (status: number): string => `Token refresh failed (${status}). Run /hive-mind:setup to re-login.`,
   readTranscriptsDirFailed: (dir: string, error: string): string =>
     `Failed to read transcripts directory ${dir}: ${error}`,
   statFailed: (path: string, error: string): string =>

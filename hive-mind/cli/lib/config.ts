@@ -7,7 +7,14 @@ import { basename, join } from 'node:path';
 export const WORKOS_CLIENT_ID = process.env.HIVE_MIND_CLIENT_ID ?? 'client_01KE10CZ6FFQB9TR2NVBQJ4AKV';
 
 export const AUTH_DIR = join(homedir(), '.claude', 'hive-mind');
-export const AUTH_FILE = join(AUTH_DIR, 'auth.json');
+
+function resolveAuthFile(): string {
+  const envPath = process.env.HIVE_MIND_AUTH_FILE;
+  if (!envPath) return join(AUTH_DIR, 'auth.json');
+  return envPath.startsWith('~/') ? join(homedir(), envPath.slice(2)) : envPath;
+}
+
+export const AUTH_FILE = resolveAuthFile();
 
 export async function ensureHiveMindDir(hiveMindDir: string) {
   await mkdir(hiveMindDir, { recursive: true });

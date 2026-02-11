@@ -29,7 +29,13 @@ import { homedir } from "os";
 import { basename, join } from "path";
 var WORKOS_CLIENT_ID = process.env.HIVE_MIND_CLIENT_ID ?? "client_01KE10CZ6FFQB9TR2NVBQJ4AKV";
 var AUTH_DIR = join(homedir(), ".claude", "hive-mind");
-var AUTH_FILE = join(AUTH_DIR, "auth.json");
+function resolveAuthFile() {
+  const envPath = process.env.HIVE_MIND_AUTH_FILE;
+  if (!envPath)
+    return join(AUTH_DIR, "auth.json");
+  return envPath.startsWith("~/") ? join(homedir(), envPath.slice(2)) : envPath;
+}
+var AUTH_FILE = resolveAuthFile();
 async function ensureHiveMindDir(hiveMindDir) {
   await mkdir(hiveMindDir, { recursive: true });
   const gitignorePath = join(hiveMindDir, ".gitignore");
@@ -198,7 +204,7 @@ var hook = {
 var errors = {
   schemaError: (path, error) => `Schema error in ${path}: ${error}`,
   authSchemaError: (error) => `Auth data schema error: ${error}`,
-  refreshSchemaError: (error) => `Token refresh response schema error: ${error}`,
+  refreshFailed: (status) => `Token refresh failed (${status}). Run /hive-mind:setup to re-login.`,
   readTranscriptsDirFailed: (dir, error) => `Failed to read transcripts directory ${dir}: ${error}`,
   statFailed: (path, error) => `Failed to stat ${path}: ${error}`,
   parseSessionFailed: (sessionId, error) => `Failed to parse session ${sessionId}: ${error}`,
@@ -15779,10 +15785,13 @@ async function refreshToken(refreshTokenValue, existingAuthenticatedAt) {
         client_id: WORKOS_CLIENT_ID
       })
     });
+    if (!response.ok) {
+      return { error: errors.refreshFailed(response.status) };
+    }
     const data = await response.json();
     const parsed = AuthDataSchema.safeParse(data);
     if (!parsed.success) {
-      return { error: errors.refreshSchemaError(parsed.error.message) };
+      return { error: errors.refreshFailed(response.status) };
     }
     return {
       ...parsed.data,

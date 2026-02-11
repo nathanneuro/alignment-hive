@@ -92,10 +92,14 @@ export async function refreshToken(
       }),
     });
 
+    if (!response.ok) {
+      return { error: errors.refreshFailed(response.status) };
+    }
+
     const data = await response.json();
     const parsed = AuthDataSchema.safeParse(data);
     if (!parsed.success) {
-      return { error: errors.refreshSchemaError(parsed.error.message) };
+      return { error: errors.refreshFailed(response.status) };
     }
 
     // Preserve authenticated_at from existing auth
