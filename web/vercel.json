@@ -2,5 +2,6 @@
   "buildCommand": "bunx convex deploy --cmd 'bun run build'",
   "devCommand": "bun dev",
   "installCommand": "bun install",
-  "framework": null
+  "framework": null,
+  "cleanUrls": true
 }
