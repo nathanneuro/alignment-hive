@@ -109,8 +109,17 @@ function getTranscriptsDirsFile(hiveMindDir) {
 async function loadTranscriptsDirs(hiveMindDir) {
   try {
     const content = await readFile(getTranscriptsDirsFile(hiveMindDir), "utf-8");
-    return content.split(`
+    const dirs = content.split(`
 `).map((line) => line.trim()).filter((line) => line.length > 0);
+    const exists = await Promise.all(dirs.map((dir) => access(dir).then(() => true, () => false)));
+    const valid = dirs.filter((_, i) => exists[i]);
+    if (valid.length < dirs.length) {
+      const file = getTranscriptsDirsFile(hiveMindDir);
+      await writeFile(file, valid.join(`
+`) + `
+`, "utf-8").catch(() => {});
+    }
+    return valid;
   } catch {
     return [];
   }

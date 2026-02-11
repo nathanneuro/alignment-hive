@@ -119,10 +119,21 @@ function getTranscriptsDirsFile(hiveMindDir: string): string {
 export async function loadTranscriptsDirs(hiveMindDir: string): Promise<Array<string>> {
   try {
     const content = await readFile(getTranscriptsDirsFile(hiveMindDir), 'utf-8');
-    return content
+    const dirs = content
       .split('\n')
       .map((line) => line.trim())
       .filter((line) => line.length > 0);
+
+    // Prune directories that no longer exist
+    const exists = await Promise.all(
+      dirs.map((dir) => access(dir).then(() => true, () => false)),
+    );
+    const valid = dirs.filter((_, i) => exists[i]);
+    if (valid.length < dirs.length) {
+      const file = getTranscriptsDirsFile(hiveMindDir);
+      await writeFile(file, valid.join('\n') + '\n', 'utf-8').catch(() => {});
+    }
+    return valid;
   } catch {
     return [];
   }
