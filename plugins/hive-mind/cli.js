@@ -13,13 +13,13 @@ var __export = (target, all) => {
 
 // cli/commands/exclude.ts
 import { readFile as readFile3, readdir as readdir3, writeFile as writeFile3 } from "fs/promises";
-import { join as join5 } from "path";
+import { join as join4 } from "path";
 
 // cli/lib/extraction.ts
 import { createReadStream } from "fs";
 import { mkdir as mkdir3, readFile as readFile2, readdir, stat as stat2, writeFile as writeFile2 } from "fs/promises";
 import { createInterface } from "readline";
-import { basename as basename2, dirname, join as join3 } from "path";
+import { basename as basename2, dirname, join as join2 } from "path";
 
 // cli/lib/config.ts
 import { execSync } from "child_process";
@@ -15701,32 +15701,8 @@ var HiveMindMetaSchema = exports_external.object({
 });
 
 // cli/lib/auth.ts
-import { mkdir as mkdir2, rmdir } from "fs/promises";
-import { join as join2 } from "path";
-var AUTH_LOCK_FILE = join2(AUTH_DIR, "auth.lock");
-var LOCK_TIMEOUT_MS = 1e4;
-var LOCK_RETRY_INTERVAL_MS = 50;
+import { mkdir as mkdir2 } from "fs/promises";
 var WORKOS_API_URL = "https://api.workos.com/user_management";
-async function acquireLock() {
-  const deadline = Date.now() + LOCK_TIMEOUT_MS;
-  while (Date.now() < deadline) {
-    try {
-      await mkdir2(AUTH_LOCK_FILE);
-      return true;
-    } catch (err) {
-      const isLockHeld = err instanceof Error && "code" in err && err.code === "EEXIST";
-      if (!isLockHeld)
-        return false;
-      await new Promise((resolve) => setTimeout(resolve, LOCK_RETRY_INTERVAL_MS));
-    }
-  }
-  return false;
-}
-async function releaseLock() {
-  try {
-    await rmdir(AUTH_LOCK_FILE);
-  } catch {}
-}
 var AuthUserSchema = exports_external.object({
   id: exports_external.string(),
   email: exports_external.string(),
@@ -15816,34 +15792,25 @@ function notAuthenticated(authErrors) {
 function authenticated(user, authErrors) {
   return { authenticated: true, user, needsLogin: false, errors: authErrors };
 }
-async function refreshWithLock(fallbackAuthData) {
+async function tryRefresh(authData) {
   const collectedErrors = [];
-  const gotLock = await acquireLock();
-  if (!gotLock)
-    return notAuthenticated();
-  try {
+  const refreshResult = await refreshToken(authData.refresh_token, authData.authenticated_at);
+  if (isErrorResult(refreshResult)) {
+    collectedErrors.push(refreshResult.error);
     const freshResult = await loadAuthData();
     if (isAuthError(freshResult)) {
       collectedErrors.push(freshResult.error);
     }
-    const freshAuthData = isAuthError(freshResult) ? null : freshResult;
-    if (freshAuthData?.access_token && !isTokenExpired(freshAuthData.access_token)) {
-      return authenticated(freshAuthData.user, toOptionalErrors(collectedErrors));
+    const freshData = isAuthError(freshResult) ? null : freshResult;
+    if (freshData?.access_token && !isTokenExpired(freshData.access_token)) {
+      return authenticated(freshData.user, toOptionalErrors(collectedErrors));
     }
-    const tokenToRefresh = freshAuthData?.refresh_token ?? fallbackAuthData.refresh_token;
-    const authenticatedAt = freshAuthData?.authenticated_at ?? fallbackAuthData.authenticated_at;
-    const refreshResult = await refreshToken(tokenToRefresh, authenticatedAt);
-    if (isErrorResult(refreshResult)) {
-      collectedErrors.push(refreshResult.error);
-      return notAuthenticated(collectedErrors);
-    }
-    if (!refreshResult)
-      return notAuthenticated(toOptionalErrors(collectedErrors));
-    await saveAuthData(refreshResult);
-    return authenticated(refreshResult.user, toOptionalErrors(collectedErrors));
-  } finally {
-    await releaseLock();
+    return notAuthenticated(collectedErrors);
   }
+  if (!refreshResult)
+    return notAuthenticated(toOptionalErrors(collectedErrors));
+  await saveAuthData(refreshResult);
+  return authenticated(refreshResult.user, toOptionalErrors(collectedErrors));
 }
 async function checkAuthStatus(attemptRefresh = true) {
   const collectedErrors = [];
@@ -15861,7 +15828,7 @@ async function checkAuthStatus(attemptRefresh = true) {
   if (!attemptRefresh || !authData.refresh_token) {
     return notAuthenticated(toOptionalErrors(collectedErrors));
   }
-  const refreshStatus = await refreshWithLock(authData);
+  const refreshStatus = await tryRefresh(authData);
   const allErrors = [...collectedErrors, ...refreshStatus.errors ?? []];
   return { ...refreshStatus, errors: toOptionalErrors(allErrors) };
 }
@@ -16037,7 +16004,7 @@ async function markSessionUploaded(sessionPath) {
   }
 }
 function getHiveMindSessionsDir(projectCwd) {
-  return join3(projectCwd, ".claude", "hive-mind", "sessions");
+  return join2(projectCwd, ".claude", "hive-mind", "sessions");
 }
 async function findRawSessions(rawDir) {
   const files = await readdir(rawDir);
@@ -16045,19 +16012,19 @@ async function findRawSessions(rawDir) {
   for (const f of files) {
     if (f.endsWith(".jsonl")) {
       if (f.startsWith("agent-")) {
-        sessions.push({ path: join3(rawDir, f), agentId: f.replace("agent-", "").replace(".jsonl", "") });
+        sessions.push({ path: join2(rawDir, f), agentId: f.replace("agent-", "").replace(".jsonl", "") });
       } else {
-        sessions.push({ path: join3(rawDir, f) });
+        sessions.push({ path: join2(rawDir, f) });
       }
       continue;
     }
-    const subagentsDir = join3(rawDir, f, "subagents");
+    const subagentsDir = join2(rawDir, f, "subagents");
     try {
       const subagentFiles = await readdir(subagentsDir);
       for (const sf of subagentFiles) {
         if (sf.endsWith(".jsonl") && sf.startsWith("agent-")) {
           sessions.push({
-            path: join3(subagentsDir, sf),
+            path: join2(subagentsDir, sf),
             agentId: sf.replace("agent-", "").replace(".jsonl", "")
           });
         }
@@ -16066,9 +16033,11 @@ async function findRawSessions(rawDir) {
   }
   return sessions;
 }
+var verbose = () => process.env.HIVE_MIND_VERBOSE === "1";
 async function checkAllSessions(cwd, transcriptsDirs) {
   const extractedDir = getHiveMindSessionsDir(cwd);
   const collectedErrors = [];
+  const t0 = performance.now();
   const [rawSessionArrays, extractedResult] = await Promise.all([
     Promise.all(transcriptsDirs.map(async (dir) => {
       try {
@@ -16080,6 +16049,7 @@ async function checkAllSessions(cwd, transcriptsDirs) {
     })),
     loadExtractedMetadata(extractedDir)
   ]);
+  const tAfterLoad = performance.now();
   const { metaMap: extractedMetaMap, errors: metadataErrors } = extractedResult;
   collectedErrors.push(...metadataErrors);
   const rawSessionMap = new Map;
@@ -16092,6 +16062,7 @@ async function checkAllSessions(cwd, transcriptsDirs) {
   const rawSessions = [...rawSessionMap.values()];
   const sessionsToExtract = [];
   const schemaErrors = [];
+  let parseCount = 0;
   await Promise.all(rawSessions.map(async (session) => {
     const { path: rawPath, agentId } = session;
     const sessionId = basename2(rawPath, ".jsonl");
@@ -16110,6 +16081,7 @@ async function checkAllSessions(cwd, transcriptsDirs) {
       }
     }
     if (needsExtract) {
+      parseCount++;
       try {
         const parseResult = await parseSessionForErrors(rawPath);
         if (parseResult.schemaErrors.length > 0) {
@@ -16124,6 +16096,10 @@ async function checkAllSessions(cwd, transcriptsDirs) {
       }
     }
   }));
+  const tEnd = performance.now();
+  if (verbose()) {
+    console.error(`[session-start] checkAllSessions: ${(tEnd - t0).toFixed(0)}ms total | ` + `findRaw+loadMeta: ${(tAfterLoad - t0).toFixed(0)}ms | ` + `statCheck+parse: ${(tEnd - tAfterLoad).toFixed(0)}ms | ` + `raw=${rawSessions.length} extracted=${extractedMetaMap.size} needsParse=${parseCount}`);
+  }
   const extractedSessions = [...extractedMetaMap.entries()].map(([sessionId, meta3]) => ({
     sessionId,
     meta: meta3
@@ -16131,6 +16107,7 @@ async function checkAllSessions(cwd, transcriptsDirs) {
   return { sessionsToExtract, schemaErrors, extractedSessions, errors: collectedErrors };
 }
 async function loadExtractedMetadata(extractedDir) {
+  const t0 = performance.now();
   const metaMap = new Map;
   const collectedErrors = [];
   let files;
@@ -16140,19 +16117,23 @@ async function loadExtractedMetadata(extractedDir) {
     return { metaMap, errors: collectedErrors };
   }
   const jsonlFiles = files.filter((f) => f.endsWith(".jsonl"));
+  const tAfterReaddir = performance.now();
   await Promise.all(jsonlFiles.map(async (file2) => {
-    const result = await readExtractedMeta(join3(extractedDir, file2));
+    const result = await readExtractedMeta(join2(extractedDir, file2));
     if (isMetaError(result)) {
       collectedErrors.push(result.error);
     } else if (result) {
       metaMap.set(result.sessionId, result);
     }
   }));
+  if (verbose()) {
+    console.error(`[session-start]   loadExtractedMetadata: ${(performance.now() - t0).toFixed(0)}ms | ` + `readdir: ${(tAfterReaddir - t0).toFixed(0)}ms | ` + `readMeta: ${(performance.now() - tAfterReaddir).toFixed(0)}ms | ` + `files=${jsonlFiles.length}`);
+  }
   return { metaMap, errors: collectedErrors };
 }
 async function extractSingleSession(cwd, sessionId) {
   const extractedDir = getHiveMindSessionsDir(cwd);
-  const transcriptsDirs = await loadTranscriptsDirs(join3(cwd, ".claude", "hive-mind"));
+  const transcriptsDirs = await loadTranscriptsDirs(join2(cwd, ".claude", "hive-mind"));
   if (transcriptsDirs.length === 0)
     return false;
   for (const transcriptsDir of transcriptsDirs) {
@@ -16160,7 +16141,7 @@ async function extractSingleSession(cwd, sessionId) {
       const rawSessions = await findRawSessions(transcriptsDir);
       const session = rawSessions.find((s) => basename2(s.path, ".jsonl") === sessionId);
       if (session) {
-        const extractedPath = join3(extractedDir, basename2(session.path));
+        const extractedPath = join2(extractedDir, basename2(session.path));
         const result = await extractSession({
           rawPath: session.path,
           outputPath: extractedPath,
@@ -16201,7 +16182,7 @@ function printWarning(message) {
 // cli/lib/utils.ts
 import { createInterface as createInterface2 } from "readline";
 import { readdir as readdir2 } from "fs/promises";
-import { join as join4 } from "path";
+import { join as join3 } from "path";
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -16219,7 +16200,7 @@ function formatSessionId(id) {
 }
 async function lookupSession(cwd, sessionIdPrefix) {
   const sessionsDir = getHiveMindSessionsDir(cwd);
-  const exactPath = join4(sessionsDir, `${sessionIdPrefix}.jsonl`);
+  const exactPath = join3(sessionsDir, `${sessionIdPrefix}.jsonl`);
   const exactMetaResult = await readExtractedMeta(exactPath);
   if (exactMetaResult && !isMetaError(exactMetaResult)) {
     return { type: "found", sessionId: sessionIdPrefix, sessionPath: exactPath, meta: exactMetaResult };
@@ -16238,7 +16219,7 @@ async function lookupSession(cwd, sessionIdPrefix) {
     return { type: "ambiguous", matches: matches.map((m) => m.replace(".jsonl", "")) };
   }
   const sessionId = matches[0].replace(".jsonl", "");
-  const sessionPath = join4(sessionsDir, matches[0]);
+  const sessionPath = join3(sessionsDir, matches[0]);
   const metaResult = await readExtractedMeta(sessionPath);
   if (!metaResult || isMetaError(metaResult)) {
     return { type: "not_found" };
@@ -16280,7 +16261,7 @@ async function excludeAll(cwd) {
   }
   let nonExcludedCount = 0;
   for (const file2 of sessionFiles) {
-    const metaResult = await readExtractedMeta(join5(sessionsDir, file2));
+    const metaResult = await readExtractedMeta(join4(sessionsDir, file2));
     if (metaResult && !isMetaError(metaResult) && !metaResult.excluded && !metaResult.agentId) {
       nonExcludedCount++;
     }
@@ -16298,7 +16279,7 @@ async function excludeAll(cwd) {
   let succeeded = 0;
   let failed = 0;
   for (const file2 of sessionFiles) {
-    const sessionPath = join5(sessionsDir, file2);
+    const sessionPath = join4(sessionsDir, file2);
     const metaResult = await readExtractedMeta(sessionPath);
     if (!metaResult || isMetaError(metaResult) || metaResult.excluded || metaResult.agentId)
       continue;
@@ -16389,7 +16370,7 @@ async function extract() {
 
 // cli/commands/search.ts
 import { readdir as readdir4 } from "fs/promises";
-import { join as join6 } from "path";
+import { join as join5 } from "path";
 
 // cli/lib/field-filter.ts
 function parseFieldList(input) {
@@ -17718,7 +17699,7 @@ async function search() {
   }
   const allSessionIds = [];
   for (const file2 of jsonlFiles) {
-    const path = join6(sessionsDir, file2);
+    const path = join5(sessionsDir, file2);
     const sessionResult = await readExtractedSession(path);
     if (isSessionError(sessionResult)) {
       printError(sessionResult.error);
@@ -17735,7 +17716,7 @@ async function search() {
   for (const file2 of jsonlFiles) {
     if (options.maxMatches !== null && totalMatches >= options.maxMatches)
       break;
-    const path = join6(sessionsDir, file2);
+    const path = join5(sessionsDir, file2);
     const sessionResult = await readExtractedSession(path);
     if (!sessionResult || isSessionError(sessionResult) || sessionResult.meta.agentId)
       continue;
@@ -17887,7 +17868,7 @@ function parseSearchOptions(args) {
 // cli/commands/index.ts
 import { readdir as readdir5 } from "fs/promises";
 import { homedir as homedir2 } from "os";
-import { join as join7 } from "path";
+import { join as join6 } from "path";
 
 // cli/lib/upload-eligibility.ts
 var SESSION_REVIEW_PERIOD_MS = 24 * 60 * 60 * 1000;
@@ -18039,7 +18020,7 @@ async function showPendingStatus(cwd) {
   }
   const mainSessions = [];
   for (const file2 of jsonlFiles) {
-    const path = join7(sessionsDir, file2);
+    const path = join6(sessionsDir, file2);
     const sessionResult = await readExtractedSession(path);
     if (!sessionResult || isSessionError(sessionResult)) {
       if (isSessionError(sessionResult)) {
@@ -18143,7 +18124,7 @@ async function index() {
   }
   const allSessions = new Map;
   for (const file2 of jsonlFiles) {
-    const path = join7(sessionsDir, file2);
+    const path = join6(sessionsDir, file2);
     const sessionResult = await readExtractedSession(path);
     if (!sessionResult || isSessionError(sessionResult)) {
       if (isSessionError(sessionResult)) {
@@ -18507,7 +18488,7 @@ function getToolResultText(content) {
 
 // cli/commands/read.ts
 import { readdir as readdir6 } from "fs/promises";
-import { join as join8 } from "path";
+import { join as join7 } from "path";
 function printUsage3() {
   console.log(usage.read());
 }
@@ -18588,7 +18569,7 @@ async function read() {
     }
     return 1;
   }
-  const sessionFile = join8(sessionsDir, matches2[0]);
+  const sessionFile = join7(sessionsDir, matches2[0]);
   let entryNumber = null;
   let rangeStart = null;
   let rangeEnd = null;
@@ -18669,7 +18650,7 @@ async function read() {
 
 // cli/commands/session-start.ts
 import { existsSync } from "fs";
-import { dirname as dirname2, join as join9 } from "path";
+import { dirname as dirname2, join as join8 } from "path";
 import { homedir as homedir4 } from "os";
 import { spawn } from "child_process";
 
@@ -19770,12 +19751,14 @@ async function readHookInput() {
   }
 }
 var AUTO_UPLOAD_DELAY_MINUTES = 10;
+var verbose2 = () => process.env.HIVE_MIND_VERBOSE === "1";
 async function sessionStart() {
+  const t0 = performance.now();
   const messages = [];
   const collectedErrors = [];
   const hookInput = await readHookInput();
   const cwd = hookInput.cwd || process.cwd();
-  const hiveMindDir = join9(cwd, ".claude", "hive-mind");
+  const hiveMindDir = join8(cwd, ".claude", "hive-mind");
   let transcriptsDirs;
   const inWorktree = await isWorktree(cwd);
   if (hookInput.transcriptPath) {
@@ -19783,7 +19766,7 @@ async function sessionStart() {
     if (inWorktree) {
       const mainPath = getMainWorktreePath(cwd);
       if (mainPath) {
-        const mainHiveMindDir = join9(mainPath, ".claude", "hive-mind");
+        const mainHiveMindDir = join8(mainPath, ".claude", "hive-mind");
         await addTranscriptsDir(mainHiveMindDir, transcriptsDir);
       }
       transcriptsDirs = [transcriptsDir];
@@ -19805,12 +19788,17 @@ async function sessionStart() {
     }
   }
   getOrCreateCheckoutId(hiveMindDir).then((checkoutId) => pingCheckout(checkoutId)).catch(() => {});
+  const tBeforeParallel = performance.now();
   const [sessionCheck, status] = await Promise.all([
     checkAllSessions(cwd, transcriptsDirs).catch((error48) => ({
       error: error48 instanceof Error ? error48.message : String(error48)
     })),
     checkAuthStatus(true)
   ]);
+  const tAfterParallel = performance.now();
+  if (verbose2()) {
+    console.error(`[session-start] parallel block (checkAllSessions+auth): ${(tAfterParallel - tBeforeParallel).toFixed(0)}ms`);
+  }
   let newSessionIds = [];
   let extractedSessions = [];
   if ("error" in sessionCheck) {
@@ -19890,12 +19878,15 @@ async function sessionStart() {
   if (status.authenticated && newSessionIds.length > 0) {
     scheduleHeartbeats(newSessionIds);
   }
+  if (verbose2()) {
+    console.error(`[session-start] total: ${(performance.now() - t0).toFixed(0)}ms`);
+  }
   process.exit(0);
 }
 function getBunPath() {
   const bunInstall = process.env.BUN_INSTALL;
-  const customPath = bunInstall ? join9(bunInstall, "bin", "bun") : null;
-  const standardPath = join9(homedir4(), ".bun", "bin", "bun");
+  const customPath = bunInstall ? join8(bunInstall, "bin", "bun") : null;
+  const standardPath = join8(homedir4(), ".bun", "bin", "bun");
   if (customPath && existsSync(customPath))
     return customPath;
   if (existsSync(standardPath))
@@ -19994,7 +19985,7 @@ async function checkExistingAuth() {
   }
   return true;
 }
-async function tryRefresh() {
+async function tryRefresh2() {
   const authResult = await loadAuthData();
   if (!authResult || isAuthError(authResult))
     return { success: false };
@@ -20101,7 +20092,7 @@ async function login() {
   if (!await checkExistingAuth()) {
     return 0;
   }
-  const refreshResult = await tryRefresh();
+  const refreshResult = await tryRefresh2();
   if (refreshResult.success) {
     return 0;
   }
@@ -20128,10 +20119,10 @@ async function setupAliasCommand() {
 
 // cli/commands/upload.ts
 import { readFile as readFile5 } from "fs/promises";
-import { join as join10 } from "path";
+import { join as join9 } from "path";
 async function uploadSession(cwd, sessionId) {
   const sessionsDir = getHiveMindSessionsDir(cwd);
-  const sessionPath = join10(sessionsDir, `${sessionId}.jsonl`);
+  const sessionPath = join9(sessionsDir, `${sessionId}.jsonl`);
   let content;
   try {
     content = await readFile5(sessionPath, "utf-8");
@@ -20189,7 +20180,7 @@ async function uploadSession(cwd, sessionId) {
 }
 async function getAgentIds(cwd, sessionId) {
   const sessionsDir = getHiveMindSessionsDir(cwd);
-  const sessionPath = join10(sessionsDir, `${sessionId}.jsonl`);
+  const sessionPath = join9(sessionsDir, `${sessionId}.jsonl`);
   const sessionResult = await readExtractedSession(sessionPath);
   if (!sessionResult || isSessionError(sessionResult)) {
     if (isSessionError(sessionResult) && process.env.DEBUG) {
@@ -20293,7 +20284,7 @@ async function upload() {
 }
 
 // cli/commands/heartbeat.ts
-import { join as join11 } from "path";
+import { join as join10 } from "path";
 async function heartbeat() {
   const cwd = process.env.CWD || process.cwd();
   const sessionIds = process.argv.slice(3);
@@ -20308,7 +20299,7 @@ async function heartbeat() {
   const project = getCanonicalProjectName(cwd);
   let failures = 0;
   for (const sessionId of sessionIds) {
-    const metaResult = await readExtractedMeta(join11(sessionsDir, `${sessionId}.jsonl`));
+    const metaResult = await readExtractedMeta(join10(sessionsDir, `${sessionId}.jsonl`));
     if (!metaResult || isMetaError(metaResult)) {
       failures++;
       continue;

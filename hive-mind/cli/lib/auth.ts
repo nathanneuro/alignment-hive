@@ -1,37 +1,9 @@
-import { mkdir, rmdir } from 'node:fs/promises';
-import { join } from 'node:path';
+import { mkdir } from 'node:fs/promises';
 import { z } from 'zod';
 import { AUTH_DIR, AUTH_FILE, WORKOS_CLIENT_ID } from './config';
 import { errors } from './messages';
 
-const AUTH_LOCK_FILE = join(AUTH_DIR, 'auth.lock');
-const LOCK_TIMEOUT_MS = 10000;
-const LOCK_RETRY_INTERVAL_MS = 50;
-
 const WORKOS_API_URL = 'https://api.workos.com/user_management';
-
-async function acquireLock(): Promise<boolean> {
-  const deadline = Date.now() + LOCK_TIMEOUT_MS;
-  while (Date.now() < deadline) {
-    try {
-      await mkdir(AUTH_LOCK_FILE);
-      return true;
-    } catch (err) {
-      const isLockHeld = err instanceof Error && 'code' in err && err.code === 'EEXIST';
-      if (!isLockHeld) return false;
-      await new Promise((resolve) => setTimeout(resolve, LOCK_RETRY_INTERVAL_MS));
-    }
-  }
-  return false;
-}
-
-async function releaseLock(): Promise<void> {
-  try {
-    await rmdir(AUTH_LOCK_FILE);
-  } catch {
-    // Ignore errors - lock may not exist
-  }
-}
 
 const AuthUserSchema = z.object({
   id: z.string(),
@@ -98,7 +70,6 @@ export async function loadAuthData(): Promise<LoadAuthResult> {
   }
 }
 
-
 export async function saveAuthData(data: AuthData): Promise<void> {
   await mkdir(AUTH_DIR, { recursive: true });
   await Bun.write(AUTH_FILE, JSON.stringify(data, null, 2), { mode: 0o600 });
@@ -137,7 +108,6 @@ export async function refreshToken(
   }
 }
 
-
 export interface AuthStatus {
   authenticated: boolean;
   user?: AuthUser;
@@ -157,38 +127,30 @@ function authenticated(user: AuthUser, authErrors?: Array<string>): AuthStatus {
   return { authenticated: true, user, needsLogin: false, errors: authErrors };
 }
 
-async function refreshWithLock(fallbackAuthData: AuthData): Promise<AuthStatus> {
+async function tryRefresh(authData: AuthData): Promise<AuthStatus> {
   const collectedErrors: Array<string> = [];
-  const gotLock = await acquireLock();
-  if (!gotLock) return notAuthenticated();
 
-  try {
-    // Re-check after acquiring lock - another process may have refreshed
+  // Try refreshing the token
+  const refreshResult = await refreshToken(authData.refresh_token, authData.authenticated_at);
+  if (isErrorResult(refreshResult)) {
+    collectedErrors.push(refreshResult.error);
+
+    // Refresh failed - re-read auth file in case another process already refreshed
     const freshResult = await loadAuthData();
     if (isAuthError(freshResult)) {
       collectedErrors.push(freshResult.error);
     }
-    const freshAuthData = isAuthError(freshResult) ? null : freshResult;
-    if (freshAuthData?.access_token && !isTokenExpired(freshAuthData.access_token)) {
-      return authenticated(freshAuthData.user, toOptionalErrors(collectedErrors));
+    const freshData = isAuthError(freshResult) ? null : freshResult;
+    if (freshData?.access_token && !isTokenExpired(freshData.access_token)) {
+      return authenticated(freshData.user, toOptionalErrors(collectedErrors));
     }
 
-    // Use fresh data if available, fall back to original
-    const tokenToRefresh = freshAuthData?.refresh_token ?? fallbackAuthData.refresh_token;
-    const authenticatedAt = freshAuthData?.authenticated_at ?? fallbackAuthData.authenticated_at;
-
-    const refreshResult = await refreshToken(tokenToRefresh, authenticatedAt);
-    if (isErrorResult(refreshResult)) {
-      collectedErrors.push(refreshResult.error);
-      return notAuthenticated(collectedErrors);
-    }
-    if (!refreshResult) return notAuthenticated(toOptionalErrors(collectedErrors));
-
-    await saveAuthData(refreshResult);
-    return authenticated(refreshResult.user, toOptionalErrors(collectedErrors));
-  } finally {
-    await releaseLock();
+    return notAuthenticated(collectedErrors);
   }
+  if (!refreshResult) return notAuthenticated(toOptionalErrors(collectedErrors));
+
+  await saveAuthData(refreshResult);
+  return authenticated(refreshResult.user, toOptionalErrors(collectedErrors));
 }
 
 export async function checkAuthStatus(attemptRefresh = true): Promise<AuthStatus> {
@@ -212,8 +174,7 @@ export async function checkAuthStatus(attemptRefresh = true): Promise<AuthStatus
     return notAuthenticated(toOptionalErrors(collectedErrors));
   }
 
-  // Pass collected errors through refresh flow
-  const refreshStatus = await refreshWithLock(authData);
+  const refreshStatus = await tryRefresh(authData);
   const allErrors = [...collectedErrors, ...(refreshStatus.errors ?? [])];
   return { ...refreshStatus, errors: toOptionalErrors(allErrors) };
 }

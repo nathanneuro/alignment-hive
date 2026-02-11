@@ -59,7 +59,10 @@ async function readHookInput(): Promise<HookInput> {
 
 const AUTO_UPLOAD_DELAY_MINUTES = 10;
 
+const verbose = () => process.env.HIVE_MIND_VERBOSE === '1';
+
 export async function sessionStart(): Promise<number> {
+  const t0 = performance.now();
   const messages: Array<string> = [];
   const collectedErrors: Array<string> = [];
   const hookInput = await readHookInput();
@@ -107,6 +110,8 @@ export async function sessionStart(): Promise<number> {
     .then((checkoutId) => pingCheckout(checkoutId))
     .catch(() => {});
 
+  const tBeforeParallel = performance.now();
+
   // Run session check and auth in parallel - reads metadata once for both extraction and eligibility
   const [sessionCheck, status] = await Promise.all([
     checkAllSessions(cwd, transcriptsDirs).catch((error) => ({
@@ -114,6 +119,11 @@ export async function sessionStart(): Promise<number> {
     })),
     checkAuthStatus(true),
   ]);
+
+  const tAfterParallel = performance.now();
+  if (verbose()) {
+    console.error(`[session-start] parallel block (checkAllSessions+auth): ${(tAfterParallel - tBeforeParallel).toFixed(0)}ms`);
+  }
 
   let newSessionIds: Array<string> = [];
   let extractedSessions: Array<{ sessionId: string; meta: HiveMindMeta }> = [];
@@ -212,6 +222,10 @@ export async function sessionStart(): Promise<number> {
 
   if (status.authenticated && newSessionIds.length > 0) {
     scheduleHeartbeats(newSessionIds);
+  }
+
+  if (verbose()) {
+    console.error(`[session-start] total: ${(performance.now() - t0).toFixed(0)}ms`);
   }
   process.exit(0);
 }

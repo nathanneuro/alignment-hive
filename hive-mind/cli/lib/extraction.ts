@@ -274,10 +274,14 @@ export interface SessionCheckResult {
   errors: Array<string>;
 }
 
+const verbose = () => process.env.HIVE_MIND_VERBOSE === '1';
+
 /** Check all sessions: which need extraction and provide metadata for eligibility */
 export async function checkAllSessions(cwd: string, transcriptsDirs: Array<string>): Promise<SessionCheckResult> {
   const extractedDir = getHiveMindSessionsDir(cwd);
   const collectedErrors: Array<string> = [];
+
+  const t0 = performance.now();
 
   // Load raw sessions from all directories and extracted metadata in parallel
   const [rawSessionArrays, extractedResult] = await Promise.all([
@@ -293,6 +297,8 @@ export async function checkAllSessions(cwd: string, transcriptsDirs: Array<strin
     ),
     loadExtractedMetadata(extractedDir),
   ]);
+
+  const tAfterLoad = performance.now();
 
   const { metaMap: extractedMetaMap, errors: metadataErrors } = extractedResult;
   collectedErrors.push(...metadataErrors);
@@ -311,6 +317,7 @@ export async function checkAllSessions(cwd: string, transcriptsDirs: Array<strin
   const schemaErrors: Array<{ sessionId: string; errors: Array<string> }> = [];
 
   // Check each raw session against extracted metadata
+  let parseCount = 0;
   await Promise.all(
     rawSessions.map(async (session) => {
       const { path: rawPath, agentId } = session;
@@ -333,6 +340,7 @@ export async function checkAllSessions(cwd: string, transcriptsDirs: Array<strin
       }
 
       if (needsExtract) {
+        parseCount++;
         try {
           const parseResult = await parseSessionForErrors(rawPath);
           if (parseResult.schemaErrors.length > 0) {
@@ -349,6 +357,17 @@ export async function checkAllSessions(cwd: string, transcriptsDirs: Array<strin
     }),
   );
 
+  const tEnd = performance.now();
+
+  if (verbose()) {
+    console.error(
+      `[session-start] checkAllSessions: ${(tEnd - t0).toFixed(0)}ms total | ` +
+        `findRaw+loadMeta: ${(tAfterLoad - t0).toFixed(0)}ms | ` +
+        `statCheck+parse: ${(tEnd - tAfterLoad).toFixed(0)}ms | ` +
+        `raw=${rawSessions.length} extracted=${extractedMetaMap.size} needsParse=${parseCount}`,
+    );
+  }
+
   const extractedSessions = [...extractedMetaMap.entries()].map(([sessionId, meta]) => ({
     sessionId,
     meta,
@@ -364,6 +383,7 @@ interface LoadMetadataResult {
 
 /** Load all extracted session metadata into a map */
 async function loadExtractedMetadata(extractedDir: string): Promise<LoadMetadataResult> {
+  const t0 = performance.now();
   const metaMap = new Map<string, HiveMindMeta>();
   const collectedErrors: Array<string> = [];
 
@@ -375,6 +395,7 @@ async function loadExtractedMetadata(extractedDir: string): Promise<LoadMetadata
   }
 
   const jsonlFiles = files.filter((f) => f.endsWith('.jsonl'));
+  const tAfterReaddir = performance.now();
 
   await Promise.all(
     jsonlFiles.map(async (file) => {
@@ -386,6 +407,15 @@ async function loadExtractedMetadata(extractedDir: string): Promise<LoadMetadata
       }
     }),
   );
+
+  if (verbose()) {
+    console.error(
+      `[session-start]   loadExtractedMetadata: ${(performance.now() - t0).toFixed(0)}ms | ` +
+        `readdir: ${(tAfterReaddir - t0).toFixed(0)}ms | ` +
+        `readMeta: ${(performance.now() - tAfterReaddir).toFixed(0)}ms | ` +
+        `files=${jsonlFiles.length}`,
+    );
+  }
 
   return { metaMap, errors: collectedErrors };
 }
