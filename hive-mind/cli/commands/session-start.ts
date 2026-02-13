@@ -1,4 +1,4 @@
-import { existsSync } from 'node:fs';
+import { closeSync, existsSync, openSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { homedir } from 'node:os';
 import { spawn } from 'node:child_process';
@@ -195,7 +195,7 @@ export async function sessionStart(): Promise<number> {
 
       const showUploadMsg = eligible.length > 0 && scheduleAutoUploads(eligible.map((s) => s.sessionId));
       if (showUploadMsg) {
-        messages.push(hook.uploadingSessions(eligible.length));
+        messages.push(hook.uploadingSessions(eligible.length, AUTO_UPLOAD_DELAY_MINUTES));
       }
 
       if (showPendingMsg || showUploadMsg) {
@@ -244,12 +244,21 @@ function getBunPath(): string {
 
 function spawnBackground(args: Array<string>): boolean {
   try {
+    const cwd = process.env.CWD || process.cwd();
+    const errorLogPath = join(cwd, '.claude', 'hive-mind', 'error.log');
+    let stderrFd: number | undefined;
+    try {
+      stderrFd = openSync(errorLogPath, 'a');
+    } catch {
+      // If we can't open the log file, fall back to ignoring stderr
+    }
     const child = spawn(getBunPath(), [process.argv[1], ...args], {
       detached: true,
-      stdio: 'ignore',
-      env: { ...process.env, CWD: process.env.CWD || process.cwd() },
+      stdio: ['ignore', 'ignore', stderrFd ?? 'ignore'],
+      env: { ...process.env, CWD: cwd },
     });
     child.unref();
+    if (stderrFd !== undefined) closeSync(stderrFd);
     return true;
   } catch {
     return false;

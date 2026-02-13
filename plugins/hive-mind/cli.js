@@ -181,8 +181,8 @@ var hook = {
     }
     return `${count} sessions pending, first uploads in ${timeStr}`;
   },
-  uploadingSessions: (count) => {
-    return `Uploading ${count} session${count === 1 ? "" : "s"} in 10 min`;
+  uploadingSessions: (count, delayMinutes) => {
+    return `Uploading ${count} session${count === 1 ? "" : "s"} in ${delayMinutes}m`;
   },
   toReview: (userHasAlias) => {
     const cli = getCliCommand(userHasAlias);
@@ -18667,7 +18667,7 @@ async function read() {
 }
 
 // cli/commands/session-start.ts
-import { existsSync } from "fs";
+import { closeSync, existsSync, openSync } from "fs";
 import { dirname as dirname2, join as join8 } from "path";
 import { homedir as homedir4 } from "os";
 import { spawn } from "child_process";
@@ -19872,7 +19872,7 @@ async function sessionStart() {
       }
       const showUploadMsg = eligible.length > 0 && scheduleAutoUploads(eligible.map((s) => s.sessionId));
       if (showUploadMsg) {
-        messages.push(hook.uploadingSessions(eligible.length));
+        messages.push(hook.uploadingSessions(eligible.length, AUTO_UPLOAD_DELAY_MINUTES));
       }
       if (showPendingMsg || showUploadMsg) {
         messages.push(hook.toReview(userHasAlias));
@@ -19913,12 +19913,20 @@ function getBunPath() {
 }
 function spawnBackground(args) {
   try {
+    const cwd = process.env.CWD || process.cwd();
+    const errorLogPath = join8(cwd, ".claude", "hive-mind", "error.log");
+    let stderrFd;
+    try {
+      stderrFd = openSync(errorLogPath, "a");
+    } catch {}
     const child = spawn(getBunPath(), [process.argv[1], ...args], {
       detached: true,
-      stdio: "ignore",
-      env: { ...process.env, CWD: process.env.CWD || process.cwd() }
+      stdio: ["ignore", "ignore", stderrFd ?? "ignore"],
+      env: { ...process.env, CWD: cwd }
     });
     child.unref();
+    if (stderrFd !== undefined)
+      closeSync(stderrFd);
     return true;
   } catch {
     return false;

@@ -40,8 +40,8 @@ export const hook = {
     }
     return `${count} sessions pending, first uploads in ${timeStr}`;
   },
-  uploadingSessions: (count: number): string => {
-    return `Uploading ${count} session${count === 1 ? '' : 's'} in 10 min`;
+  uploadingSessions: (count: number, delayMinutes: number): string => {
+    return `Uploading ${count} session${count === 1 ? '' : 's'} in ${delayMinutes}m`;
   },
   toReview: (userHasAlias: boolean): string => {
     const cli = getCliCommand(userHasAlias);
