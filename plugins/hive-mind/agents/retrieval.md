@@ -1,11 +1,11 @@
 ---
 name: retrieval
 description: |
-  Use this agent when historical context might help - which is more often than you'd expect. This agent searches past Claude Code sessions and returns relevant quotes about decisions, preferences, issues, failed approaches, and discussions.
+  Use this agent when historical context might help. This agent searches past Claude Code sessions and returns relevant quotes about decisions, preferences, issues, failed approaches, and discussions.
 
   **Use when users ask about past sessions**—"do you remember...", "what did we discuss...", "have we tried this before?"
 
-  **Whenever you're planning anything—spawn it.** New feature, refactor, bug fix, research direction—historical context surfaces failed approaches, user preferences, and prior decisions that prevent planning mistakes.
+  **Consider spawning when** planning something where similar work may have been done before in the project, or when a task involves many user preferences (style, conventions, tooling choices).
 
   **Can be spawned in parallel with the Explore agent** to get both current code and historical context.
 
@@ -33,15 +33,6 @@ description: |
   </commentary>
   </example>
 
-  <example>
-  Context: Research assistance
-  user: "Help me find papers about reward hacking"
-  assistant: "Let me check what we know about this topic."
-  [Spawns retrieval agent: "User looking for papers on reward hacking. Looking for: papers already discussed or cited, relevant researchers mentioned, related concepts explored, past paper-finding sessions and how they went, user preferences about paper selection or relevance criteria."]
-  <commentary>
-  Research builds on previous exploration. Retrieval surfaces not just topic-specific discussions, but also how the user likes to find and evaluate papers.
-  </commentary>
-  </example>
 model: opus
 color: cyan
 skills: hive-mind:retrieval
