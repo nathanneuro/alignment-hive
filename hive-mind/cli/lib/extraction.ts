@@ -89,6 +89,11 @@ export async function extractSession(options: ExtractSessionOptions) {
     if (error) schemaErrors.push(error);
     if (entry) entries.push(entry);
   }
+
+  // Count non-empty lines to match countRawLines() (which counts all non-empty lines,
+  // not just valid JSON). This ensures the line count comparison in checkAllSessions
+  // does not cause spurious re-extractions for files with malformed JSON lines.
+  const rawLineCount = content.split('\n').filter((l) => l.trim()).length;
   if (process.env.DEBUG) {
     console.log(`[extract] Parsing: ${(performance.now() - t0Parse).toFixed(2)}ms for ${entries.length} entries`);
   }
@@ -109,12 +114,14 @@ export async function extractSession(options: ExtractSessionOptions) {
     extractedAt: new Date().toISOString(),
     rawMtime: rawStat.mtime.toISOString(),
     messageCount: entries.length,
+    rawLineCount,
     rawPath,
     ...(agentId && { agentId }),
     ...(parentSessionId && { parentSessionId }),
     ...(schemaErrors.length > 0 && { schemaErrors }),
-    // Preserve excluded flag from previous extraction
+    // Preserve flags from previous extraction
     ...(existingMeta?.excluded && { excluded: true }),
+    ...(existingMeta?.uploadedAt && { uploadedAt: existingMeta.uploadedAt }),
   };
 
   resetDetectSecretsStats();
@@ -225,6 +232,17 @@ export function getHiveMindSessionsDir(projectCwd: string): string {
   return join(projectCwd, '.claude', 'hive-mind', 'sessions');
 }
 
+/** Count non-empty lines in a file by streaming (no parsing) */
+async function countRawLines(filePath: string): Promise<number> {
+  const stream = createReadStream(filePath, { encoding: 'utf-8' });
+  const rl = createInterface({ input: stream, crlfDelay: Infinity });
+  let count = 0;
+  for await (const line of rl) {
+    if (line.trim()) count++;
+  }
+  return count;
+}
+
 async function findRawSessions(rawDir: string) {
   const files = await readdir(rawDir);
   const sessions: Array<{ path: string; agentId?: string }> = [];
@@ -332,7 +350,16 @@ export async function checkAllSessions(cwd: string, transcriptsDirs: Array<strin
         try {
           const rawStat = await stat(rawPath);
           const storedMtime = new Date(existingMeta.rawMtime).getTime();
-          needsExtract = rawStat.mtime.getTime() > storedMtime;
+          if (rawStat.mtime.getTime() > storedMtime) {
+            // Mtime changed - check if content actually changed via line count
+            if (existingMeta.rawLineCount != null) {
+              const currentLineCount = await countRawLines(rawPath);
+              needsExtract = currentLineCount !== existingMeta.rawLineCount;
+            } else {
+              // No stored line count (old extraction) - always re-extract
+              needsExtract = true;
+            }
+          }
         } catch (err) {
           collectedErrors.push(errors.statFailed(rawPath, err instanceof Error ? err.message : String(err)));
           needsExtract = true;

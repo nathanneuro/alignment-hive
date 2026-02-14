@@ -184,6 +184,9 @@ var hook = {
   uploadingSessions: (count, delayMinutes) => {
     return `Uploading ${count} session${count === 1 ? "" : "s"} in ${delayMinutes}m`;
   },
+  uploadInProgress: (count) => {
+    return `${count} session${count === 1 ? "" : "s"} eligible (upload in progress)`;
+  },
   toReview: (userHasAlias) => {
     const cli = getCliCommand(userHasAlias);
     return `To review: ${cli} index --pending`;
@@ -15710,6 +15713,7 @@ var HiveMindMetaSchema = exports_external.object({
   rawPath: exports_external.string(),
   agentId: exports_external.string().optional(),
   parentSessionId: exports_external.string().optional(),
+  rawLineCount: exports_external.number().optional(),
   schemaErrors: exports_external.array(exports_external.string()).optional(),
   excluded: exports_external.boolean().optional(),
   uploadedAt: exports_external.string().optional()
@@ -15916,6 +15920,8 @@ async function extractSession(options) {
     if (entry)
       entries.push(entry);
   }
+  const rawLineCount = content.split(`
+`).filter((l) => l.trim()).length;
   if (process.env.DEBUG) {
     console.log(`[extract] Parsing: ${(performance.now() - t0Parse).toFixed(2)}ms for ${entries.length} entries`);
   }
@@ -15930,11 +15936,13 @@ async function extractSession(options) {
     extractedAt: new Date().toISOString(),
     rawMtime: rawStat.mtime.toISOString(),
     messageCount: entries.length,
+    rawLineCount,
     rawPath,
     ...agentId && { agentId },
     ...parentSessionId && { parentSessionId },
     ...schemaErrors.length > 0 && { schemaErrors },
-    ...existingMeta?.excluded && { excluded: true }
+    ...existingMeta?.excluded && { excluded: true },
+    ...existingMeta?.uploadedAt && { uploadedAt: existingMeta.uploadedAt }
   };
   resetDetectSecretsStats();
   const t0 = performance.now();
@@ -16024,6 +16032,16 @@ async function markSessionUploaded(sessionPath) {
 function getHiveMindSessionsDir(projectCwd) {
   return join2(projectCwd, ".claude", "hive-mind", "sessions");
 }
+async function countRawLines(filePath) {
+  const stream = createReadStream(filePath, { encoding: "utf-8" });
+  const rl = createInterface({ input: stream, crlfDelay: Infinity });
+  let count = 0;
+  for await (const line of rl) {
+    if (line.trim())
+      count++;
+  }
+  return count;
+}
 async function findRawSessions(rawDir) {
   const files = await readdir(rawDir);
   const sessions = [];
@@ -16092,7 +16110,14 @@ async function checkAllSessions(cwd, transcriptsDirs) {
       try {
         const rawStat = await stat2(rawPath);
         const storedMtime = new Date(existingMeta.rawMtime).getTime();
-        needsExtract = rawStat.mtime.getTime() > storedMtime;
+        if (rawStat.mtime.getTime() > storedMtime) {
+          if (existingMeta.rawLineCount != null) {
+            const currentLineCount = await countRawLines(rawPath);
+            needsExtract = currentLineCount !== existingMeta.rawLineCount;
+          } else {
+            needsExtract = true;
+          }
+        }
       } catch (err) {
         collectedErrors.push(errors.statFailed(rawPath, err instanceof Error ? err.message : String(err)));
         needsExtract = true;
@@ -18668,6 +18693,7 @@ async function read() {
 
 // cli/commands/session-start.ts
 import { closeSync, existsSync, openSync } from "fs";
+import { readFile as readFile5 } from "fs/promises";
 import { dirname as dirname2, join as join8 } from "path";
 import { homedir as homedir4 } from "os";
 import { spawn } from "child_process";
@@ -19870,11 +19896,18 @@ async function sessionStart() {
         const earliestUploadAt = uploadTimes.length > 0 ? Math.min(...uploadTimes) : null;
         messages.push(hook.pendingSessions(pending.length, earliestUploadAt));
       }
-      const showUploadMsg = eligible.length > 0 && scheduleAutoUploads(eligible.map((s) => s.sessionId));
-      if (showUploadMsg) {
-        messages.push(hook.uploadingSessions(eligible.length, AUTO_UPLOAD_DELAY_MINUTES));
+      if (eligible.length > 0) {
+        const alreadyRunning = await isUploadRunning(cwd);
+        if (alreadyRunning) {
+          messages.push(hook.uploadInProgress(eligible.length));
+        } else {
+          const spawned = scheduleAutoUploads(cwd, eligible.map((s) => s.sessionId));
+          if (spawned) {
+            messages.push(hook.uploadingSessions(eligible.length, AUTO_UPLOAD_DELAY_MINUTES));
+          }
+        }
       }
-      if (showPendingMsg || showUploadMsg) {
+      if (showPendingMsg || eligible.length > 0) {
         messages.push(hook.toReview(userHasAlias));
       }
     } catch (err) {
@@ -19942,11 +19975,28 @@ function scheduleHeartbeats(sessionIds) {
     return true;
   return spawnBackground(["heartbeat", ...sessionIds]);
 }
-function scheduleAutoUploads(sessionIds) {
+function getUploadPidPath(cwd) {
+  return join8(cwd, ".claude", "hive-mind", "upload.pid");
+}
+async function isUploadRunning(cwd) {
+  const pidPath = getUploadPidPath(cwd);
+  try {
+    const pidStr = await readFile5(pidPath, "utf-8");
+    const pid = parseInt(pidStr.trim(), 10);
+    if (isNaN(pid))
+      return false;
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+function scheduleAutoUploads(cwd, sessionIds) {
   if (sessionIds.length === 0)
     return true;
   const delaySeconds = AUTO_UPLOAD_DELAY_MINUTES * 60;
-  return spawnBackground(["upload", "--delay", String(delaySeconds), ...sessionIds]);
+  const pidPath = getUploadPidPath(cwd);
+  return spawnBackground(["upload", "--pid-file", pidPath, "--delay", String(delaySeconds), ...sessionIds]);
 }
 
 // cli/commands/login.ts
@@ -20144,14 +20194,14 @@ async function setupAliasCommand() {
 }
 
 // cli/commands/upload.ts
-import { readFile as readFile5 } from "fs/promises";
+import { readFile as readFile6, unlink, writeFile as writeFile5 } from "fs/promises";
 import { join as join9 } from "path";
 async function uploadSession(cwd, sessionId) {
   const sessionsDir = getHiveMindSessionsDir(cwd);
   const sessionPath = join9(sessionsDir, `${sessionId}.jsonl`);
   let content;
   try {
-    content = await readFile5(sessionPath, "utf-8");
+    content = await readFile6(sessionPath, "utf-8");
   } catch {
     return { success: false, error: "Session file not found" };
   }
@@ -20281,10 +20331,14 @@ async function upload() {
   const args = process.argv.slice(3);
   const sessionIds = [];
   let delaySeconds = 0;
+  let pidFile = null;
   for (let i2 = 0;i2 < args.length; i2++) {
     const arg = args[i2];
     if (arg === "--delay" && args[i2 + 1]) {
       delaySeconds = parseInt(args[i2 + 1], 10);
+      i2++;
+    } else if (arg === "--pid-file" && args[i2 + 1]) {
+      pidFile = args[i2 + 1];
       i2++;
     } else if (!arg.startsWith("-")) {
       sessionIds.push(arg);
@@ -20295,9 +20349,27 @@ async function upload() {
     return 1;
   }
   const cwd = process.env.CWD || process.cwd();
+  if (pidFile) {
+    try {
+      await writeFile5(pidFile, String(process.pid));
+    } catch {}
+  }
+  const cleanup = async () => {
+    if (pidFile) {
+      try {
+        await unlink(pidFile);
+      } catch {}
+    }
+  };
+  const onSignal = () => {
+    cleanup().finally(() => process.exit(1));
+  };
+  process.on("SIGTERM", onSignal);
+  process.on("SIGINT", onSignal);
   const status = await checkAuthStatus(true);
   if (!status.authenticated) {
     printError(uploadCmd.notAuthenticated);
+    await cleanup();
     return 1;
   }
   let failures = 0;
@@ -20306,6 +20378,7 @@ async function upload() {
     if (result !== 0)
       failures++;
   }
+  await cleanup();
   return failures > 0 ? 1 : 0;
 }
 

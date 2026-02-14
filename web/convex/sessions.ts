@@ -64,9 +64,6 @@ export const generateUploadUrl = mutation({
     if (session.userId !== identity.subject) {
       throw new Error('Session belongs to different user');
     }
-    if (session.upload) {
-      throw new Error('Session already uploaded');
-    }
 
     return await ctx.storage.generateUploadUrl();
   },
@@ -93,9 +90,6 @@ export const saveUpload = mutation({
     }
     if (session.userId !== identity.subject) {
       throw new Error('Session belongs to different user');
-    }
-    if (session.upload) {
-      throw new Error('Session already uploaded');
     }
 
     await ctx.db.patch(session._id, {

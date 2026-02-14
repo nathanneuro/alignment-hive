@@ -1,4 +1,4 @@
-import { readFile } from 'node:fs/promises';
+import { readFile, unlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { checkAuthStatus } from '../lib/auth.js';
 import { getCanonicalProjectName } from '../lib/config.js';
@@ -180,11 +180,15 @@ export async function upload(): Promise<number> {
   const args = process.argv.slice(3);
   const sessionIds: Array<string> = [];
   let delaySeconds = 0;
+  let pidFile: string | null = null;
 
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
     if (arg === '--delay' && args[i + 1]) {
       delaySeconds = parseInt(args[i + 1], 10);
+      i++;
+    } else if (arg === '--pid-file' && args[i + 1]) {
+      pidFile = args[i + 1];
       i++;
     } else if (!arg.startsWith('-')) {
       sessionIds.push(arg);
@@ -198,9 +202,36 @@ export async function upload(): Promise<number> {
 
   const cwd = process.env.CWD || process.cwd();
 
+  // Write PID file so other session-start invocations can detect us
+  if (pidFile) {
+    try {
+      await writeFile(pidFile, String(process.pid));
+    } catch {
+      // Non-fatal - continue without PID file
+    }
+  }
+
+  const cleanup = async () => {
+    if (pidFile) {
+      try {
+        await unlink(pidFile);
+      } catch {
+        // Already gone
+      }
+    }
+  };
+
+  // Clean up PID file on signals (upload delay can be 10+ minutes)
+  const onSignal = () => {
+    cleanup().finally(() => process.exit(1));
+  };
+  process.on('SIGTERM', onSignal);
+  process.on('SIGINT', onSignal);
+
   const status = await checkAuthStatus(true);
   if (!status.authenticated) {
     printError(uploadCmd.notAuthenticated);
+    await cleanup();
     return 1;
   }
 
@@ -209,5 +240,7 @@ export async function upload(): Promise<number> {
     const result = await uploadSingleSession(cwd, sessionId, delaySeconds);
     if (result !== 0) failures++;
   }
+
+  await cleanup();
   return failures > 0 ? 1 : 0;
 }

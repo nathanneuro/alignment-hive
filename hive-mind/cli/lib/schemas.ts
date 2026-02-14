@@ -202,6 +202,7 @@ export const HiveMindMetaSchema = z.object({
   rawPath: z.string(),
   agentId: z.string().optional(),
   parentSessionId: z.string().optional(),
+  rawLineCount: z.number().optional(),
   schemaErrors: z.array(z.string()).optional(),
   excluded: z.boolean().optional(),
   uploadedAt: z.string().optional(),

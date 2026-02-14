@@ -43,6 +43,9 @@ export const hook = {
   uploadingSessions: (count: number, delayMinutes: number): string => {
     return `Uploading ${count} session${count === 1 ? '' : 's'} in ${delayMinutes}m`;
   },
+  uploadInProgress: (count: number): string => {
+    return `${count} session${count === 1 ? '' : 's'} eligible (upload in progress)`;
+  },
   toReview: (userHasAlias: boolean): string => {
     const cli = getCliCommand(userHasAlias);
     return `To review: ${cli} index --pending`;

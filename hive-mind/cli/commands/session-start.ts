@@ -1,4 +1,5 @@
 import { closeSync, existsSync, openSync } from 'node:fs';
+import { readFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { homedir } from 'node:os';
 import { spawn } from 'node:child_process';
@@ -193,12 +194,19 @@ export async function sessionStart(): Promise<number> {
         messages.push(hook.pendingSessions(pending.length, earliestUploadAt));
       }
 
-      const showUploadMsg = eligible.length > 0 && scheduleAutoUploads(eligible.map((s) => s.sessionId));
-      if (showUploadMsg) {
-        messages.push(hook.uploadingSessions(eligible.length, AUTO_UPLOAD_DELAY_MINUTES));
+      if (eligible.length > 0) {
+        const alreadyRunning = await isUploadRunning(cwd);
+        if (alreadyRunning) {
+          messages.push(hook.uploadInProgress(eligible.length));
+        } else {
+          const spawned = scheduleAutoUploads(cwd, eligible.map((s) => s.sessionId));
+          if (spawned) {
+            messages.push(hook.uploadingSessions(eligible.length, AUTO_UPLOAD_DELAY_MINUTES));
+          }
+        }
       }
 
-      if (showPendingMsg || showUploadMsg) {
+      if (showPendingMsg || eligible.length > 0) {
         messages.push(hook.toReview(userHasAlias));
       }
     } catch (err) {
@@ -275,8 +283,26 @@ function scheduleHeartbeats(sessionIds: Array<string>): boolean {
   return spawnBackground(['heartbeat', ...sessionIds]);
 }
 
-function scheduleAutoUploads(sessionIds: Array<string>): boolean {
+function getUploadPidPath(cwd: string): string {
+  return join(cwd, '.claude', 'hive-mind', 'upload.pid');
+}
+
+async function isUploadRunning(cwd: string): Promise<boolean> {
+  const pidPath = getUploadPidPath(cwd);
+  try {
+    const pidStr = await readFile(pidPath, 'utf-8');
+    const pid = parseInt(pidStr.trim(), 10);
+    if (isNaN(pid)) return false;
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function scheduleAutoUploads(cwd: string, sessionIds: Array<string>): boolean {
   if (sessionIds.length === 0) return true;
   const delaySeconds = AUTO_UPLOAD_DELAY_MINUTES * 60;
-  return spawnBackground(['upload', '--delay', String(delaySeconds), ...sessionIds]);
+  const pidPath = getUploadPidPath(cwd);
+  return spawnBackground(['upload', '--pid-file', pidPath, '--delay', String(delaySeconds), ...sessionIds]);
 }
