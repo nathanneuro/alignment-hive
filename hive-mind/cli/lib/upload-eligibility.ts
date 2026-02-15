@@ -44,7 +44,7 @@ export function checkSessionEligibility(meta: HiveMindMeta, authIssuedAt: number
     };
   }
 
-  if (meta.uploadedAt) {
+  if (meta.uploadedAt && meta.extractedAt <= meta.uploadedAt) {
     return {
       sessionId,
       meta,

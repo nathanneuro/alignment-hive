@@ -129,12 +129,7 @@ async function uploadSessionWithAgents(
   return { success: true, agentCount };
 }
 
-async function uploadSingleSession(cwd: string, sessionIdPrefix: string, delaySeconds: number): Promise<number> {
-  if (delaySeconds > 0) {
-    printInfo(uploadCmd.waitingDelay(delaySeconds));
-    await sleep(delaySeconds * 1000);
-  }
-
+async function uploadSingleSession(cwd: string, sessionIdPrefix: string): Promise<number> {
   const lookup = await lookupSession(cwd, sessionIdPrefix);
 
   if (lookup.type === 'not_found') {
@@ -228,6 +223,12 @@ export async function upload(): Promise<number> {
   process.on('SIGTERM', onSignal);
   process.on('SIGINT', onSignal);
 
+  // Sleep once before the batch, not per-session
+  if (delaySeconds > 0) {
+    printInfo(uploadCmd.waitingDelay(delaySeconds));
+    await sleep(delaySeconds * 1000);
+  }
+
   const status = await checkAuthStatus(true);
   if (!status.authenticated) {
     printError(uploadCmd.notAuthenticated);
@@ -237,7 +238,7 @@ export async function upload(): Promise<number> {
 
   let failures = 0;
   for (const sessionId of sessionIds) {
-    const result = await uploadSingleSession(cwd, sessionId, delaySeconds);
+    const result = await uploadSingleSession(cwd, sessionId);
     if (result !== 0) failures++;
   }
 

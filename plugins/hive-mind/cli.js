@@ -17939,7 +17939,7 @@ function checkSessionEligibility(meta3, authIssuedAt) {
       reason: "Excluded by user"
     };
   }
-  if (meta3.uploadedAt) {
+  if (meta3.uploadedAt && meta3.extractedAt <= meta3.uploadedAt) {
     return {
       sessionId,
       meta: meta3,
@@ -20288,11 +20288,7 @@ async function uploadSessionWithAgents(cwd, sessionId) {
   }
   return { success: true, agentCount };
 }
-async function uploadSingleSession(cwd, sessionIdPrefix, delaySeconds) {
-  if (delaySeconds > 0) {
-    printInfo(uploadCmd.waitingDelay(delaySeconds));
-    await sleep(delaySeconds * 1000);
-  }
+async function uploadSingleSession(cwd, sessionIdPrefix) {
   const lookup2 = await lookupSession(cwd, sessionIdPrefix);
   if (lookup2.type === "not_found") {
     printError(uploadCmd.sessionNotFound(sessionIdPrefix));
@@ -20366,6 +20362,10 @@ async function upload() {
   };
   process.on("SIGTERM", onSignal);
   process.on("SIGINT", onSignal);
+  if (delaySeconds > 0) {
+    printInfo(uploadCmd.waitingDelay(delaySeconds));
+    await sleep(delaySeconds * 1000);
+  }
   const status = await checkAuthStatus(true);
   if (!status.authenticated) {
     printError(uploadCmd.notAuthenticated);
@@ -20374,7 +20374,7 @@ async function upload() {
   }
   let failures = 0;
   for (const sessionId of sessionIds) {
-    const result = await uploadSingleSession(cwd, sessionId, delaySeconds);
+    const result = await uploadSingleSession(cwd, sessionId);
     if (result !== 0)
       failures++;
   }
@@ -20455,8 +20455,7 @@ async function main() {
   const cmd = COMMANDS[command];
   try {
     const exitCode = await cmd.handler();
-    if (exitCode !== 0)
-      process.exit(exitCode);
+    process.exit(exitCode);
   } catch (error48) {
     printError(error48 instanceof Error ? error48.message : String(error48));
     process.exit(1);

@@ -55,7 +55,7 @@ async function main(): Promise<void> {
 
   try {
     const exitCode = await cmd.handler();
-    if (exitCode !== 0) process.exit(exitCode);
+    process.exit(exitCode);
   } catch (error) {
     printError(error instanceof Error ? error.message : String(error));
     process.exit(1);
