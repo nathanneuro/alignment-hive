@@ -112,22 +112,6 @@ If the output shows "UV_NOT_FOUND", tell the user:
 
 If they agree, run the installation command and verify it worked. If they decline, explain the skill cannot proceed without it.
 
-Check if marker-pdf is installed:
-
-!`which marker_single || echo "MARKER_NOT_FOUND"`
-
-If the output shows "MARKER_NOT_FOUND", tell the user you're installing it:
-
-> "Installing `marker-pdf` for high-quality PDF-to-markdown conversion. It uses deep learning to handle academic paper layouts, equations, and tables. This may take a minute on first install (it downloads ML model dependencies)."
-
-Then run:
-
-```bash
-uv tool install marker-pdf
-```
-
-Verify with `which marker_single`. If installation fails, note that we'll fall back to the basic converter and continue.
-
 ---
 
 ## Execution
