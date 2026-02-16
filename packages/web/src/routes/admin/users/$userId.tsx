@@ -1,6 +1,8 @@
 import { usePaginatedQuery } from 'convex/react';
 import { Link, createFileRoute } from '@tanstack/react-router';
 import { api } from '../../../../convex/_generated/api';
+import { SessionsTable } from '~/components/sessions-table';
+import { formatProject, formatRelativeTime } from '~/lib/format';
 
 export const Route = createFileRoute('/admin/users/$userId')({
   component: UserDetail,
@@ -81,60 +83,7 @@ function UserDetail() {
       <div className="space-y-4">
         <h2 className="text-lg font-semibold text-foreground">Sessions</h2>
 
-        <div className="rounded-lg border border-border bg-card">
-          <table className="w-full">
-            <thead>
-              <tr className="border-b border-border text-left text-sm text-muted-foreground">
-                <th className="px-4 py-3 font-medium">Session</th>
-                <th className="px-4 py-3 font-medium">Project</th>
-                <th className="px-4 py-3 font-medium">Lines</th>
-                <th className="px-4 py-3 font-medium">Status</th>
-                <th className="px-4 py-3 font-medium">Last Activity</th>
-                <th className="px-4 py-3 font-medium"></th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-border">
-              {results.map((session) => (
-                <tr key={session._id} className="hover:bg-muted/50">
-                  <td className="px-4 py-3 font-mono text-sm">
-                    {session.sessionId.slice(0, 8)}
-                  </td>
-                  <td className="px-4 py-3 text-sm text-muted-foreground truncate max-w-[200px]" title={session.project}>
-                    {formatProject(session.project)}
-                  </td>
-                  <td className="px-4 py-3 text-sm tabular-nums">
-                    {session.lineCount}
-                  </td>
-                  <td className="px-4 py-3">
-                    {session.upload ? (
-                      <span className="inline-flex items-center rounded-full bg-green-500/10 px-2 py-0.5 text-xs font-medium text-green-600 dark:text-green-400">
-                        Uploaded
-                      </span>
-                    ) : (
-                      <span className="inline-flex items-center rounded-full bg-muted px-2 py-0.5 text-xs font-medium text-muted-foreground">
-                        Not uploaded
-                      </span>
-                    )}
-                  </td>
-                  <td className="px-4 py-3 text-sm text-muted-foreground">
-                    {formatRelativeTime(session.lastHeartbeat)}
-                  </td>
-                  <td className="px-4 py-3 text-right">
-                    {session.upload && (
-                      <Link
-                        to="/admin/sessions/$sessionId"
-                        params={{ sessionId: session.sessionId }}
-                        className="text-sm text-primary hover:underline"
-                      >
-                        View
-                      </Link>
-                    )}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+        <SessionsTable sessions={results} showUserColumn={false} loading={status === 'LoadingFirstPage'} />
 
         {status === 'CanLoadMore' && (
           <button
@@ -147,31 +96,4 @@ function UserDetail() {
       </div>
     </div>
   );
-}
-
-function formatRelativeTime(timestamp: number): string {
-  const now = Date.now();
-  const diff = now - timestamp;
-
-  const minutes = Math.floor(diff / 60000);
-  if (minutes < 60) return `${minutes}m ago`;
-
-  const hours = Math.floor(minutes / 60);
-  if (hours < 24) return `${hours}h ago`;
-
-  const days = Math.floor(hours / 24);
-  if (days < 7) return `${days}d ago`;
-
-  return new Date(timestamp).toLocaleDateString();
-}
-
-function formatProject(project: string): string {
-  // Extract repo name from github.com/owner/repo format
-  const match = project.match(/github\.com\/([^/]+\/[^/]+)/);
-  if (match) {
-    return match[1];
-  }
-  // For local paths, show just the last directory
-  const parts = project.split('/');
-  return parts[parts.length - 1] || project;
 }

@@ -1,0 +1,112 @@
+import { Link, useNavigate } from '@tanstack/react-router';
+import { formatProject, formatRelativeTime } from '~/lib/format';
+
+interface Session {
+  _id: string;
+  sessionId: string;
+  userId: string;
+  project: string;
+  lineCount: number;
+  lastHeartbeat: number;
+  summary?: string;
+  childSessionCount?: number;
+  upload?: {
+    storageId: string;
+    uploadedAt: number;
+  };
+  user?: {
+    firstName?: string;
+    lastName?: string;
+    email: string;
+  } | null;
+}
+
+interface SessionsTableProps {
+  sessions: Session[];
+  showUserColumn?: boolean;
+  loading?: boolean;
+}
+
+export function SessionsTable({ sessions, showUserColumn = true, loading }: SessionsTableProps) {
+  const navigate = useNavigate();
+
+  if (loading) {
+    return (
+      <div className="flex h-32 items-center justify-center rounded-lg border border-border bg-card">
+        <div className="text-muted-foreground">Loading...</div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="rounded-lg border border-border bg-card">
+      <table className="w-full">
+        <thead>
+          <tr className="border-b border-border text-left text-sm text-muted-foreground">
+            <th className="px-4 py-3 font-medium">Session</th>
+            {showUserColumn && <th className="px-4 py-3 font-medium">User</th>}
+            <th className="px-4 py-3 font-medium">Project</th>
+            <th className="px-4 py-3 font-medium">Lines</th>
+            <th className="px-4 py-3 font-medium">Agents</th>
+            <th className="px-4 py-3 font-medium">Last Activity</th>
+            <th className="px-4 py-3 font-medium">Summary</th>
+          </tr>
+        </thead>
+        <tbody className="divide-y divide-border">
+          {sessions.map((session) => (
+            <tr
+              key={session._id}
+              onClick={session.upload ? () => navigate({ to: '/admin/sessions/$sessionId', params: { sessionId: session.sessionId } }) : undefined}
+              className={session.upload ? 'cursor-pointer hover:bg-muted/50' : 'opacity-50'}
+            >
+              <td className="px-4 py-3 font-mono text-sm">
+                {session.sessionId.slice(0, 8)}
+              </td>
+              {showUserColumn && (
+                <td className="px-4 py-3 text-sm">
+                  {session.user ? (
+                    <Link
+                      to="/admin/users/$userId"
+                      params={{ userId: session.userId }}
+                      className="text-primary hover:underline"
+                      onClick={(e) => e.stopPropagation()}
+                    >
+                      {formatUserName(session.user)}
+                    </Link>
+                  ) : (
+                    <span className="text-muted-foreground">Unknown</span>
+                  )}
+                </td>
+              )}
+              <td className="px-4 py-3 text-sm text-muted-foreground truncate max-w-[200px]" title={session.project}>
+                {formatProject(session.project)}
+              </td>
+              <td className="px-4 py-3 text-sm tabular-nums">
+                {session.lineCount}
+              </td>
+              <td className="px-4 py-3 text-sm tabular-nums text-muted-foreground">
+                {session.childSessionCount || '—'}
+              </td>
+              <td className="px-4 py-3 text-sm text-muted-foreground">
+                {formatRelativeTime(session.lastHeartbeat)}
+              </td>
+              <td className="px-4 py-3 text-sm text-muted-foreground truncate max-w-[300px]" title={session.summary}>
+                {session.summary || '—'}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function formatUserName(user: { firstName?: string; lastName?: string; email: string }): string {
+  if (user.firstName && user.lastName) {
+    return `${user.firstName} ${user.lastName}`;
+  }
+  if (user.firstName) {
+    return user.firstName;
+  }
+  return user.email;
+}

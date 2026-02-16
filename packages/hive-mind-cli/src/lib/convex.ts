@@ -72,7 +72,11 @@ export async function generateUploadUrl(sessionId: string): Promise<string | nul
   }
 }
 
-export async function saveUpload(sessionId: string, storageId: string): Promise<boolean> {
+export async function saveUpload(
+  sessionId: string,
+  storageId: string,
+  summary?: string,
+): Promise<boolean> {
   try {
     const client = await getAuthenticatedClient();
     if (!client) return false;
@@ -80,6 +84,7 @@ export async function saveUpload(sessionId: string, storageId: string): Promise<
     await client.mutation(api.sessions.saveUpload, {
       sessionId,
       storageId: storageId as any,
+      summary,
     });
     return true;
   } catch (error) {

@@ -19,6 +19,7 @@ export default defineSchema({
     lineCount: v.number(),
     lastHeartbeat: v.number(),
     parentSessionId: v.optional(v.string()),
+    summary: v.optional(v.string()),
     upload: v.optional(
       v.object({
         storageId: v.id('_storage'),

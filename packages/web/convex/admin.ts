@@ -17,20 +17,22 @@ export const listSessions = query({
       return { page: [], isDone: true, continueCursor: '' };
     }
 
-    // Build query with filters
-    let sessionsQuery = ctx.db.query('sessions').order('desc');
+    // Build query - filter to top-level sessions only (no parentSessionId)
+    const sessionsQuery = ctx.db
+      .query('sessions')
+      .withIndex('by_parent_session_id', (q) => q.eq('parentSessionId', undefined))
+      .order('desc');
 
-    if (args.userId) {
-      sessionsQuery = ctx.db
-        .query('sessions')
-        .withIndex('by_user_id', (q) => q.eq('userId', args.userId!))
-        .order('desc');
-    }
+    // Note: userId filter requires different index, so we filter post-query for now
+    // TODO: Add compound index if userId filtering becomes common
 
     const paginatedSessions = await sessionsQuery.paginate(args.paginationOpts);
 
-    // Apply client-side filters for project and hasUpload
+    // Apply remaining filters post-pagination
     let filteredPage = paginatedSessions.page;
+    if (args.userId) {
+      filteredPage = filteredPage.filter((s) => s.userId === args.userId);
+    }
     if (args.project) {
       filteredPage = filteredPage.filter((s) => s.project === args.project);
     }
@@ -54,9 +56,23 @@ export const listSessions = query({
       users.filter(Boolean).map((u) => [u!.workosId, u!])
     );
 
-    const sessionsWithUsers = filteredPage.map((session) => ({
+    // Get child session counts for each session
+    const childCounts = await Promise.all(
+      filteredPage.map(async (session) => {
+        const children = await ctx.db
+          .query('sessions')
+          .withIndex('by_parent_session_id', (q) =>
+            q.eq('parentSessionId', session.sessionId)
+          )
+          .collect();
+        return children.length;
+      })
+    );
+
+    const sessionsWithUsers = filteredPage.map((session, i) => ({
       ...session,
       user: userMap.get(session.userId) ?? null,
+      childSessionCount: childCounts[i],
     }));
 
     return {
@@ -195,10 +211,38 @@ export const getUserSessions = query({
       return { page: [], isDone: true, continueCursor: '' };
     }
 
-    return await ctx.db
+    const paginatedSessions = await ctx.db
       .query('sessions')
       .withIndex('by_user_id', (q) => q.eq('userId', args.userId))
       .order('desc')
       .paginate(args.paginationOpts);
+
+    // Filter out agent sessions
+    const filteredPage = paginatedSessions.page.filter(
+      (s) => !s.parentSessionId
+    );
+
+    // Get child session counts
+    const childCounts = await Promise.all(
+      filteredPage.map(async (session) => {
+        const children = await ctx.db
+          .query('sessions')
+          .withIndex('by_parent_session_id', (q) =>
+            q.eq('parentSessionId', session.sessionId)
+          )
+          .collect();
+        return children.length;
+      })
+    );
+
+    const sessionsWithCounts = filteredPage.map((session, i) => ({
+      ...session,
+      childSessionCount: childCounts[i],
+    }));
+
+    return {
+      ...paginatedSessions,
+      page: sessionsWithCounts,
+    };
   },
 });

@@ -109,8 +109,9 @@ export const saveUpload = mutation({
   args: {
     sessionId: v.string(),
     storageId: v.id('_storage'),
+    summary: v.optional(v.string()),
   },
-  handler: async (ctx, { sessionId, storageId }) => {
+  handler: async (ctx, { sessionId, storageId, summary }) => {
     const identity = await ctx.auth.getUserIdentity();
     if (!identity) {
       throw new Error('Not authenticated');
@@ -129,6 +130,7 @@ export const saveUpload = mutation({
     }
 
     await ctx.db.patch(session._id, {
+      ...(summary && { summary }),
       upload: {
         storageId,
         uploadedAt: Date.now(),

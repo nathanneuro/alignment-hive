@@ -9,13 +9,13 @@ import {
   type KnownEntry,
 } from '@alignment-hive/shared';
 import { Link } from '@tanstack/react-router';
+import { formatSessionId } from '~/lib/format';
 
 interface SessionViewerProps {
   url: string;
-  sessionId: string;
 }
 
-export function SessionViewer({ url, sessionId }: SessionViewerProps) {
+export function SessionViewer({ url }: SessionViewerProps) {
   const [data, setData] = useState<{
     meta: HiveMindMeta;
     blocks: LogicalBlock[];
@@ -156,8 +156,8 @@ function VirtualizedBlockList({
   return (
     <div
       ref={parentRef}
-      className="h-[600px] overflow-auto"
-      style={{ contain: 'strict' }}
+      className="overflow-auto"
+      style={{ contain: 'strict', height: 'calc(100vh - 205px)', minHeight: '400px' }}
     >
       <div
         style={{
@@ -169,18 +169,18 @@ function VirtualizedBlockList({
         {virtualizer.getVirtualItems().map((virtualItem) => (
           <div
             key={virtualItem.key}
+            data-index={virtualItem.index}
+            ref={virtualizer.measureElement}
             style={{
               position: 'absolute',
               top: 0,
               left: 0,
               width: '100%',
-              height: `${virtualItem.size}px`,
               transform: `translateY(${virtualItem.start}px)`,
             }}
           >
             <BlockRow
               block={blocks[virtualItem.index]}
-              index={virtualItem.index}
               isExpanded={expandedBlocks.has(virtualItem.index)}
               onToggle={() => onToggleExpand(virtualItem.index)}
             />
@@ -193,21 +193,24 @@ function VirtualizedBlockList({
 
 interface BlockRowProps {
   block: LogicalBlock;
-  index: number;
   isExpanded: boolean;
   onToggle: () => void;
 }
 
-function BlockRow({ block, index, isExpanded, onToggle }: BlockRowProps) {
+function BlockRow({ block, isExpanded, onToggle }: BlockRowProps) {
   const summary = getBlockSummary(block);
   const typeLabel = getTypeLabel(block);
   const typeColor = getTypeColor(block);
 
+  // Only show agent links for Task blocks that spawn agents
+  const isTaskBlock = block.type === 'tool' && 'toolName' in block && block.toolName === 'Task';
+  const agentId = isTaskBlock && 'agentId' in block ? block.agentId : null;
+
   if (!isExpanded) {
     return (
-      <button
+      <div
         onClick={onToggle}
-        className="flex h-7 w-full items-center gap-2 px-4 text-left text-sm hover:bg-muted/50"
+        className="flex h-7 w-full cursor-pointer items-center gap-2 px-4 text-left text-sm hover:bg-muted/50"
       >
         <span className="w-8 shrink-0 text-right font-mono text-xs text-muted-foreground">
           {block.lineNumber}
@@ -218,17 +221,17 @@ function BlockRow({ block, index, isExpanded, onToggle }: BlockRowProps) {
           {typeLabel}
         </span>
         <span className="truncate text-muted-foreground">{summary}</span>
-        {block.type === 'tool' && 'agentId' in block && block.agentId && (
+        {agentId && (
           <Link
             to="/admin/sessions/$sessionId"
-            params={{ sessionId: block.agentId }}
+            params={{ sessionId: agentId.startsWith('agent-') ? agentId : `agent-${agentId}` }}
             onClick={(e) => e.stopPropagation()}
             className="ml-auto shrink-0 font-mono text-xs text-primary hover:underline"
           >
-            {block.agentId.slice(0, 8)}
+            {formatSessionId(agentId)}
           </Link>
         )}
-      </button>
+      </div>
     );
   }
 
@@ -248,7 +251,7 @@ function BlockRow({ block, index, isExpanded, onToggle }: BlockRowProps) {
         </span>
         <span className="truncate text-muted-foreground">{summary}</span>
       </button>
-      <div className="max-h-72 overflow-auto bg-muted/25 p-4">
+      <div className="overflow-auto bg-muted/25 p-4" style={{ maxHeight: '50vh' }}>
         <BlockContent block={block} />
       </div>
     </div>
@@ -370,3 +373,4 @@ function truncate(str: string, maxLen: number): string {
   if (firstLine.length <= maxLen) return firstLine;
   return firstLine.slice(0, maxLen - 3) + '...';
 }
+

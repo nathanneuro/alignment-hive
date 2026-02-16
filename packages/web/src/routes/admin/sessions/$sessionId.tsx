@@ -2,6 +2,7 @@ import { useQuery } from 'convex/react';
 import { Link, createFileRoute } from '@tanstack/react-router';
 import { api } from '../../../../convex/_generated/api';
 import { SessionViewer } from '~/components/session-viewer';
+import { formatProject, formatSessionId } from '~/lib/format';
 
 export const Route = createFileRoute('/admin/sessions/$sessionId')({
   component: SessionDetail,
@@ -36,13 +37,13 @@ function SessionDetail() {
           Sessions
         </Link>
         <span>/</span>
-        <span className="font-mono">{sessionId.slice(0, 8)}</span>
+        <span className="font-mono">{formatSessionId(sessionId)}</span>
       </div>
 
       <div className="grid gap-4 lg:grid-cols-[1fr_300px]">
         <div className="space-y-4">
           {contentUrl ? (
-            <SessionViewer url={contentUrl} sessionId={sessionId} />
+            <SessionViewer url={contentUrl} />
           ) : (
             <div className="rounded-lg border border-border bg-card p-8 text-center text-muted-foreground">
               Session content not uploaded
@@ -145,7 +146,7 @@ function SessionDetail() {
                       params={{ sessionId: child.sessionId }}
                       className="font-mono text-sm text-primary hover:underline"
                     >
-                      {child.sessionId.slice(0, 8)}
+                      {formatSessionId(child.sessionId)}
                     </Link>
                   </li>
                 ))}
@@ -158,13 +159,3 @@ function SessionDetail() {
   );
 }
 
-function formatProject(project: string): string {
-  // Extract repo name from github.com/owner/repo format
-  const match = project.match(/github\.com\/([^/]+\/[^/]+)/);
-  if (match) {
-    return match[1];
-  }
-  // Fallback: show last part of path
-  const parts = project.split('/');
-  return parts[parts.length - 1] || project;
-}

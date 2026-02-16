@@ -1,6 +1,7 @@
 import { usePaginatedQuery } from 'convex/react';
 import { Link, createFileRoute } from '@tanstack/react-router';
 import { api } from '../../../../convex/_generated/api';
+import { formatRelativeTime } from '~/lib/format';
 
 export const Route = createFileRoute('/admin/users/')({
   component: UsersList,
@@ -90,20 +91,4 @@ function UsersList() {
       )}
     </div>
   );
-}
-
-function formatRelativeTime(timestamp: number): string {
-  const now = Date.now();
-  const diff = now - timestamp;
-
-  const minutes = Math.floor(diff / 60000);
-  if (minutes < 60) return `${minutes}m ago`;
-
-  const hours = Math.floor(minutes / 60);
-  if (hours < 24) return `${hours}h ago`;
-
-  const days = Math.floor(hours / 24);
-  if (days < 7) return `${days}d ago`;
-
-  return new Date(timestamp).toLocaleDateString();
 }
