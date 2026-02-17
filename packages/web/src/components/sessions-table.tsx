@@ -1,4 +1,4 @@
-import { Link, useNavigate } from '@tanstack/react-router';
+import { Link } from '@tanstack/react-router';
 import { formatProject, formatRelativeTime } from '~/lib/format';
 
 interface Session {
@@ -28,8 +28,6 @@ interface SessionsTableProps {
 }
 
 export function SessionsTable({ sessions, showUserColumn = true, loading }: SessionsTableProps) {
-  const navigate = useNavigate();
-
   if (loading) {
     return (
       <div className="flex h-32 items-center justify-center rounded-lg border border-border bg-card">
@@ -56,20 +54,28 @@ export function SessionsTable({ sessions, showUserColumn = true, loading }: Sess
           {sessions.map((session) => (
             <tr
               key={session._id}
-              onClick={session.upload ? () => navigate({ to: '/admin/sessions/$sessionId', params: { sessionId: session.sessionId } }) : undefined}
-              className={session.upload ? 'cursor-pointer hover:bg-muted/50' : 'opacity-50'}
+              className={`relative ${session.upload ? 'hover:bg-muted/50' : 'opacity-50'}`}
             >
               <td className="px-4 py-3 font-mono text-sm">
-                {session.sessionId.slice(0, 8)}
+                {session.upload ? (
+                  <Link
+                    to="/admin/sessions/$sessionId"
+                    params={{ sessionId: session.sessionId }}
+                    className="after:absolute after:inset-0"
+                  >
+                    {session.sessionId.slice(0, 8)}
+                  </Link>
+                ) : (
+                  session.sessionId.slice(0, 8)
+                )}
               </td>
               {showUserColumn && (
-                <td className="px-4 py-3 text-sm">
+                <td className="relative z-10 px-4 py-3 text-sm">
                   {session.user ? (
                     <Link
                       to="/admin/users/$userId"
                       params={{ userId: session.userId }}
                       className="text-primary hover:underline"
-                      onClick={(e) => e.stopPropagation()}
                     >
                       {formatUserName(session.user)}
                     </Link>

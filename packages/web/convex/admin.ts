@@ -1,6 +1,14 @@
 import { paginationOptsValidator } from 'convex/server';
 import { v } from 'convex/values';
-import { query } from './_generated/server';
+import { parseKnownEntry, type KnownEntry } from '@alignment-hive/shared';
+import type { Id } from './_generated/dataModel';
+import {
+  query,
+  internalAction,
+  internalMutation,
+  internalQuery,
+} from './_generated/server';
+import { internal } from './_generated/api';
 import { requireAdmin } from './lib/admin';
 
 export const listSessions = query({
@@ -8,7 +16,7 @@ export const listSessions = query({
     paginationOpts: paginationOptsValidator,
     excludeUserIds: v.optional(v.array(v.string())),
     excludeUnknownUsers: v.optional(v.boolean()),
-    project: v.optional(v.string()),
+    excludeProjects: v.optional(v.array(v.string())),
     hasUpload: v.optional(v.boolean()),
   },
   handler: async (ctx, args) => {
@@ -42,10 +50,12 @@ export const listSessions = query({
         q.or(...allUsers.map((u) => q.eq(q.field('userId'), u.workosId)))
       );
     }
-    if (args.project) {
-      sessionsQuery = sessionsQuery.filter((q) =>
-        q.eq(q.field('project'), args.project)
-      );
+    if (args.excludeProjects?.length) {
+      for (const project of args.excludeProjects) {
+        sessionsQuery = sessionsQuery.filter((q) =>
+          q.neq(q.field('project'), project)
+        );
+      }
     }
     if (args.hasUpload !== undefined) {
       sessionsQuery = args.hasUpload
@@ -243,5 +253,110 @@ export const getUserSessions = query({
       ...paginatedSessions,
       page: sessionsWithCounts,
     };
+  },
+});
+
+// --- Backfill ---
+
+export const updateSessionSummary = internalMutation({
+  args: {
+    sessionId: v.id('sessions'),
+    summary: v.string(),
+  },
+  handler: async (ctx, { sessionId, summary }) => {
+    await ctx.db.patch(sessionId, { summary });
+  },
+});
+
+function extractSummaryFromEntries(entries: KnownEntry[]): string | undefined {
+  const summaries = entries.filter(
+    (e): e is KnownEntry & { type: 'summary' } => e.type === 'summary'
+  );
+  if (summaries.length > 0) {
+    return summaries.at(-1)!.summary;
+  }
+  // Fallback: first user prompt
+  for (const entry of entries) {
+    if (entry.type !== 'user') continue;
+    const content = entry.message.content;
+    if (!content) continue;
+    let text: string | undefined;
+    if (typeof content === 'string') {
+      text = content;
+    } else if (Array.isArray(content)) {
+      for (const block of content) {
+        if (block.type === 'text' && 'text' in block) {
+          text = block.text;
+          break;
+        }
+      }
+    }
+    if (text) {
+      const trimmed = text.trim();
+      if (trimmed.startsWith('<')) continue;
+      const firstLine = trimmed.split('\n')[0].trim();
+      if (firstLine) {
+        return firstLine.length > 100
+          ? `${firstLine.slice(0, 97)}...`
+          : firstLine;
+      }
+    }
+  }
+  return undefined;
+}
+
+export const backfillSummaries = internalAction({
+  args: {},
+  handler: async (ctx): Promise<{ updated: number; skipped: number; total: number }> => {
+    const sessions = await ctx.runQuery(
+      internal.admin.sessionsNeedingBackfill
+    ) as Array<{ _id: Id<'sessions'>; upload: { storageId: Id<'_storage'> } }>;
+
+    let updated = 0;
+    let skipped = 0;
+
+    for (const session of sessions) {
+      const url = await ctx.storage.getUrl(session.upload.storageId);
+      if (!url) {
+        skipped++;
+        continue;
+      }
+
+      const response = await fetch(url);
+      const text = await response.text();
+      const entries: KnownEntry[] = [];
+
+      for (const line of text.split('\n')) {
+        if (!line.trim()) continue;
+        try {
+          const parsed = JSON.parse(line);
+          const result = parseKnownEntry(parsed);
+          if (result.data) entries.push(result.data);
+        } catch {
+          // skip unparseable lines
+        }
+      }
+
+      const summary = extractSummaryFromEntries(entries);
+      if (summary) {
+        await ctx.runMutation(internal.admin.updateSessionSummary, {
+          sessionId: session._id,
+          summary,
+        });
+        updated++;
+      } else {
+        skipped++;
+      }
+    }
+
+    return { updated, skipped, total: sessions.length };
+  },
+});
+
+export const sessionsNeedingBackfill = internalQuery({
+  args: {},
+  handler: async (ctx) => {
+    const sessions = await ctx.db.query('sessions').collect();
+    return sessions.filter((s) => s.upload && !s.summary);
   },
 });

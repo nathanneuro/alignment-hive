@@ -1,4 +1,4 @@
-import { usePaginatedQuery } from 'convex/react';
+import { usePaginatedQuery } from 'convex-helpers/react/cache';
 import { Link, createFileRoute } from '@tanstack/react-router';
 import { api } from '../../../../convex/_generated/api';
 import { SessionsTable } from '~/components/sessions-table';

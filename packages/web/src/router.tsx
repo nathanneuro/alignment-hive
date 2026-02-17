@@ -3,6 +3,7 @@ import { ConvexQueryClient } from '@convex-dev/react-query';
 import { QueryClient } from '@tanstack/react-query';
 import { setupRouterSsrQueryIntegration } from '@tanstack/react-router-ssr-query';
 import { ConvexProviderWithAuth, ConvexReactClient } from 'convex/react';
+import { ConvexQueryCacheProvider } from 'convex-helpers/react/cache';
 import { AuthKitProvider, useAccessToken, useAuth } from '@workos/authkit-tanstack-react-start/client';
 import { useCallback, useMemo } from 'react';
 import { routeTree } from './routeTree.gen';
@@ -60,7 +61,9 @@ export function getRouter() {
     Wrap: ({ children }) => (
       <AuthKitProvider>
         <ConvexProviderWithAuth client={convexQueryClient.convexClient} useAuth={useAuthFromWorkOS}>
-          {children}
+          <ConvexQueryCacheProvider>
+            {children}
+          </ConvexQueryCacheProvider>
         </ConvexProviderWithAuth>
       </AuthKitProvider>
     ),

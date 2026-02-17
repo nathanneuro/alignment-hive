@@ -1,4 +1,5 @@
-import { useQuery } from 'convex/react';
+import { useEffect, useState } from 'react';
+import { useQuery } from 'convex-helpers/react/cache';
 import { Link, createFileRoute } from '@tanstack/react-router';
 import { api } from '../../../../convex/_generated/api';
 import { SessionViewer } from '~/components/session-viewer';
@@ -11,6 +12,7 @@ export const Route = createFileRoute('/admin/sessions/$sessionId')({
 function SessionDetail() {
   const { sessionId } = Route.useParams();
   const data = useQuery(api.admin.getSession, { sessionId });
+  const model = useSessionModel(data?.contentUrl ?? null);
 
   if (data === undefined) {
     return (
@@ -67,6 +69,12 @@ function SessionDetail() {
                   {formatProject(session.project)}
                 </dd>
               </div>
+              {model && (
+                <div>
+                  <dt className="text-muted-foreground">Model</dt>
+                  <dd>{model}</dd>
+                </div>
+              )}
               <div>
                 <dt className="text-muted-foreground">Lines</dt>
                 <dd>{session.lineCount}</dd>
@@ -157,5 +165,43 @@ function SessionDetail() {
       </div>
     </div>
   );
+}
+
+function useSessionModel(contentUrl: string | null): string | undefined {
+  const [model, setModel] = useState<string | undefined>();
+
+  useEffect(() => {
+    if (!contentUrl) return;
+
+    fetch(contentUrl)
+      .then((res) => res.text())
+      .then((text) => {
+        const counts = new Map<string, number>();
+        for (const line of text.split('\n')) {
+          if (!line.includes('"assistant"')) continue;
+          try {
+            const entry = JSON.parse(line);
+            if (entry.type === 'assistant' && entry.message?.model) {
+              const m = entry.message.model;
+              counts.set(m, (counts.get(m) ?? 0) + 1);
+            }
+          } catch {
+            // skip
+          }
+        }
+        let best: string | undefined;
+        let bestCount = 0;
+        for (const [m, count] of counts) {
+          if (count > bestCount) {
+            best = m;
+            bestCount = count;
+          }
+        }
+        setModel(best);
+      })
+      .catch(() => {});
+  }, [contentUrl]);
+
+  return model;
 }
 
