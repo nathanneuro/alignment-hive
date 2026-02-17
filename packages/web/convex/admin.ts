@@ -6,7 +6,8 @@ import { requireAdmin } from './lib/admin';
 export const listSessions = query({
   args: {
     paginationOpts: paginationOptsValidator,
-    userId: v.optional(v.string()),
+    excludeUserIds: v.optional(v.array(v.string())),
+    excludeUnknownUsers: v.optional(v.boolean()),
     project: v.optional(v.string()),
     hasUpload: v.optional(v.boolean()),
   },
@@ -23,29 +24,12 @@ export const listSessions = query({
       .withIndex('by_parent_session_id', (q) => q.eq('parentSessionId', undefined))
       .order('desc');
 
-    // Note: userId filter requires different index, so we filter post-query for now
-    // TODO: Add compound index if userId filtering becomes common
-
     const paginatedSessions = await sessionsQuery.paginate(args.paginationOpts);
 
-    // Apply remaining filters post-pagination
-    let filteredPage = paginatedSessions.page;
-    if (args.userId) {
-      filteredPage = filteredPage.filter((s) => s.userId === args.userId);
-    }
-    if (args.project) {
-      filteredPage = filteredPage.filter((s) => s.project === args.project);
-    }
-    if (args.hasUpload !== undefined) {
-      filteredPage = filteredPage.filter((s) =>
-        args.hasUpload ? s.upload !== undefined : s.upload === undefined
-      );
-    }
-
-    // Get user info for each session
-    const userIds = [...new Set(filteredPage.map((s) => s.userId))];
+    // Look up users first (needed for both display and filtering)
+    const allUserIds = [...new Set(paginatedSessions.page.map((s) => s.userId))];
     const users = await Promise.all(
-      userIds.map((workosId) =>
+      allUserIds.map((workosId) =>
         ctx.db
           .query('users')
           .withIndex('by_workos_id', (q) => q.eq('workosId', workosId))
@@ -55,6 +39,26 @@ export const listSessions = query({
     const userMap = new Map(
       users.filter(Boolean).map((u) => [u!.workosId, u!])
     );
+
+    // Apply filters post-pagination
+    const excludeSet = args.excludeUserIds
+      ? new Set(args.excludeUserIds)
+      : null;
+    let filteredPage = paginatedSessions.page;
+    if (excludeSet) {
+      filteredPage = filteredPage.filter((s) => !excludeSet.has(s.userId));
+    }
+    if (args.excludeUnknownUsers) {
+      filteredPage = filteredPage.filter((s) => userMap.has(s.userId));
+    }
+    if (args.project) {
+      filteredPage = filteredPage.filter((s) => s.project === args.project);
+    }
+    if (args.hasUpload !== undefined) {
+      filteredPage = filteredPage.filter((s) =>
+        args.hasUpload ? s.upload !== undefined : s.upload === undefined
+      );
+    }
 
     // Get child session counts for each session
     const childCounts = await Promise.all(
