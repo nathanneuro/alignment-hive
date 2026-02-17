@@ -11,2024 +11,17 @@ var __export = (target, all) => {
     });
 };
 
-// cli/commands/exclude.ts
+// src/commands/exclude.ts
 import { readFile as readFile3, readdir as readdir3, writeFile as writeFile3 } from "fs/promises";
 import { join as join4 } from "path";
 
-// cli/lib/extraction.ts
+// src/lib/extraction.ts
 import { createReadStream } from "fs";
 import { mkdir as mkdir3, readFile as readFile2, readdir, stat as stat2, writeFile as writeFile2 } from "fs/promises";
 import { createInterface } from "readline";
 import { basename as basename2, dirname, join as join2 } from "path";
 
-// cli/lib/config.ts
-import { execSync } from "child_process";
-import { randomUUID } from "crypto";
-import { access, mkdir, readFile, stat, writeFile } from "fs/promises";
-import { homedir } from "os";
-import { basename, join } from "path";
-var WORKOS_CLIENT_ID = process.env.HIVE_MIND_CLIENT_ID ?? "client_01KE10CZ6FFQB9TR2NVBQJ4AKV";
-var AUTH_DIR = join(homedir(), ".claude", "hive-mind");
-function resolveAuthFile() {
-  const envPath = process.env.HIVE_MIND_AUTH_FILE;
-  if (!envPath)
-    return join(AUTH_DIR, "auth.json");
-  return envPath.startsWith("~/") ? join(homedir(), envPath.slice(2)) : envPath;
-}
-var AUTH_FILE = resolveAuthFile();
-async function ensureHiveMindDir(hiveMindDir) {
-  await mkdir(hiveMindDir, { recursive: true });
-  const gitignorePath = join(hiveMindDir, ".gitignore");
-  try {
-    await access(gitignorePath);
-  } catch {
-    await writeFile(gitignorePath, `*
-`);
-  }
-}
-async function getOrCreateCheckoutId(hiveMindDir) {
-  const checkoutIdFile = join(hiveMindDir, "checkout-id");
-  try {
-    const id = await readFile(checkoutIdFile, "utf-8");
-    return id.trim();
-  } catch {
-    const id = randomUUID();
-    await ensureHiveMindDir(hiveMindDir);
-    await writeFile(checkoutIdFile, id);
-    return id;
-  }
-}
-function getShellConfig() {
-  const shell = process.env.SHELL ?? "/bin/bash";
-  if (shell.includes("zsh")) {
-    return { file: "~/.zshrc", sourceCmd: "source ~/.zshrc" };
-  }
-  if (shell.includes("bash")) {
-    return { file: "~/.bashrc", sourceCmd: "source ~/.bashrc" };
-  }
-  if (shell.includes("fish")) {
-    return {
-      file: "~/.config/fish/config.fish",
-      sourceCmd: "source ~/.config/fish/config.fish"
-    };
-  }
-  return { file: "~/.profile", sourceCmd: "source ~/.profile" };
-}
-function getCanonicalProjectName(cwd) {
-  try {
-    const remoteUrl = execSync("git remote get-url origin", {
-      cwd,
-      encoding: "utf-8",
-      stdio: ["pipe", "pipe", "pipe"]
-    }).trim();
-    const canonical = remoteUrl.replace(/^git@/, "").replace(/^https?:\/\//, "").replace(":", "/").replace(/\.git$/, "");
-    return canonical;
-  } catch {
-    return basename(cwd);
-  }
-}
-async function isWorktree(cwd) {
-  try {
-    const gitPath = join(cwd, ".git");
-    const gitStat = await stat(gitPath);
-    return gitStat.isFile();
-  } catch {
-    return false;
-  }
-}
-function getMainWorktreePath(cwd) {
-  try {
-    const output = execSync("git worktree list --porcelain", {
-      cwd,
-      encoding: "utf-8",
-      stdio: ["pipe", "pipe", "pipe"]
-    });
-    const match = output.match(/^worktree (.+)$/m);
-    return match?.[1] ?? null;
-  } catch {
-    return null;
-  }
-}
-function getTranscriptsDirsFile(hiveMindDir) {
-  return join(hiveMindDir, "transcripts-dirs");
-}
-async function loadTranscriptsDirs(hiveMindDir) {
-  try {
-    const content = await readFile(getTranscriptsDirsFile(hiveMindDir), "utf-8");
-    const dirs = content.split(`
-`).map((line) => line.trim()).filter((line) => line.length > 0);
-    const exists = await Promise.all(dirs.map((dir) => access(dir).then(() => true, () => false)));
-    const valid = dirs.filter((_, i) => exists[i]);
-    if (valid.length < dirs.length) {
-      const file = getTranscriptsDirsFile(hiveMindDir);
-      await writeFile(file, valid.join(`
-`) + `
-`, "utf-8").catch(() => {});
-    }
-    return valid;
-  } catch {
-    return [];
-  }
-}
-async function addTranscriptsDir(hiveMindDir, dir) {
-  await ensureHiveMindDir(hiveMindDir);
-  const existing = await loadTranscriptsDirs(hiveMindDir);
-  if (!existing.includes(dir)) {
-    existing.push(dir);
-    await writeFile(getTranscriptsDirsFile(hiveMindDir), existing.join(`
-`) + `
-`, "utf-8");
-  }
-}
-
-// cli/lib/messages.ts
-function getCliCommand(hasAlias) {
-  if (hasAlias) {
-    return "hive-mind";
-  }
-  return `bun ${process.argv[1]}`;
-}
-var hook = {
-  notLoggedIn: () => {
-    return "To connect: run /hive-mind:setup";
-  },
-  loggedIn: (displayName) => {
-    return `Connected as ${displayName}`;
-  },
-  extracted: (count) => {
-    return `Extracted ${count} session${count === 1 ? "" : "s"}`;
-  },
-  schemaErrors: (errorCount, sessionCount, errors) => {
-    const unique = [...new Set(errors)];
-    return `Schema issues in ${sessionCount} session${sessionCount === 1 ? "" : "s"} (${errorCount} entries): ${unique.join("; ")}`;
-  },
-  extractionFailed: (error) => {
-    return `Extraction failed: ${error}`;
-  },
-  bunNotInstalled: () => {
-    return "To set up hive-mind: run /hive-mind:setup";
-  },
-  pendingSessions: (count, earliestUploadAt) => {
-    if (!earliestUploadAt) {
-      return `${count} session${count === 1 ? "" : "s"} ready to upload`;
-    }
-    const totalMinutes = Math.max(0, Math.ceil((earliestUploadAt - Date.now()) / (1000 * 60)));
-    const hours = Math.floor(totalMinutes / 60);
-    const minutes = totalMinutes % 60;
-    const timeStr = hours > 0 ? `${hours}h ${minutes}m` : `${minutes}m`;
-    if (count === 1) {
-      return `1 session uploads in ${timeStr}`;
-    }
-    return `${count} sessions pending, first uploads in ${timeStr}`;
-  },
-  uploadingSessions: (count, delayMinutes) => {
-    return `Uploading ${count} session${count === 1 ? "" : "s"} in ${delayMinutes}m`;
-  },
-  uploadInProgress: (count) => {
-    return `${count} session${count === 1 ? "" : "s"} eligible (upload in progress)`;
-  },
-  toReview: (userHasAlias) => {
-    const cli = getCliCommand(userHasAlias);
-    return `To review: ${cli} index --pending`;
-  },
-  aliasUpdated: (sourceCmd) => {
-    return `hive-mind alias updated. To activate: ${sourceCmd}`;
-  },
-  extractionsFailed: (count) => {
-    return `Failed to extract ${count} session${count === 1 ? "" : "s"}`;
-  },
-  sessionCheckFailed: () => {
-    return "Failed to check session upload status";
-  },
-  errorsOccurred: (count) => {
-    return `${count} error${count === 1 ? "" : "s"} occurred. Set HIVE_MIND_VERBOSE=1 for details.`;
-  }
-};
-var errors = {
-  schemaError: (path, error) => `Schema error in ${path}: ${error}`,
-  authSchemaError: (error) => `Auth data schema error: ${error}`,
-  refreshFailed: (status) => `Token refresh failed (${status}). Run /hive-mind:setup to re-login.`,
-  readTranscriptsDirFailed: (dir, error) => `Failed to read transcripts directory ${dir}: ${error}`,
-  statFailed: (path, error) => `Failed to stat ${path}: ${error}`,
-  parseSessionFailed: (sessionId, error) => `Failed to parse session ${sessionId}: ${error}`,
-  aliasUpdateFailed: (error) => `Failed to update alias: ${error}`,
-  eligibilityCheckFailed: (error) => `Failed to check session eligibility: ${error}`,
-  markUploadedFailed: (error) => `Failed to mark session uploaded: ${error}`,
-  noSessions: "No sessions found yet. Sessions are extracted automatically when you start Claude Code.",
-  noSessionsIn: (dir) => `No sessions in ${dir}`,
-  sessionNotFound: (prefix) => `No session matching "${prefix}"`,
-  multipleSessions: (prefix) => `Multiple sessions match "${prefix}":`,
-  andMore: (count) => `  ... and ${count} more`,
-  invalidNumber: (flag, value) => `Invalid ${flag} value: "${value}" (expected a positive number)`,
-  invalidNonNegative: (flag) => `Invalid ${flag} value (expected a non-negative number)`,
-  entryNotFound: (requested, max) => `Entry ${requested} not found (session has ${max} entries)`,
-  rangeNotFound: (start, end, max) => `No entries found in range ${start}-${end} (session has ${max} entries)`,
-  invalidEntry: (value) => `Invalid entry number: "${value}"`,
-  invalidRange: (value) => `Invalid range: "${value}"`,
-  emptySession: "Session has no entries",
-  noPattern: "No pattern specified",
-  invalidRegex: (error) => `Invalid regex: ${error}`,
-  invalidTimeSpec: (flag, value) => `Invalid ${flag} value: "${value}" (expected relative time like "2h", "7d" or date like "2025-01-10")`,
-  unknownCommand: (cmd) => `Unknown command: ${cmd}`,
-  unexpectedResponse: "Unexpected response from server",
-  bunNotInstalled: "To run hive-mind, install Bun: curl -fsSL https://bun.sh/install | bash",
-  loginStatusYes: (displayName) => `logged in: yes (${displayName})`,
-  loginStatusNo: "logged in: no"
-};
-var usage = {
-  main: (commands) => {
-    const lines = ["Usage: hive-mind <command>", "", "Commands:"];
-    for (const { name, description } of commands) {
-      lines.push(`  ${name.padEnd(15)} ${description}`);
-    }
-    return lines.join(`
-`);
-  },
-  read: () => {
-    return [
-      "Usage: read <session-id> [N | N-M] [options]",
-      "",
-      "Read session entries. Session ID supports prefix matching.",
-      "",
-      "Options:",
-      "  N             Entry number to read (full content)",
-      "  N-M           Entry range to read",
-      "  --target N    Target total words (default 2000)",
-      "  --skip N      Skip first N words per field (for pagination)",
-      "  --show FIELDS Show full content for fields (comma-separated)",
-      "  --hide FIELDS Redact fields to word counts (comma-separated)",
-      "",
-      "Field specifiers:",
-      "  user, assistant, thinking, system, summary",
-      "  tool, tool:<name>, tool:<name>:input, tool:<name>:result",
-      "",
-      "Truncation:",
-      "  Text is adaptively truncated to fit within the target word count.",
-      "  Output shows: '[Limited to N words per field. Use --skip N for more.]'",
-      "  Use --skip with the shown N value to continue reading.",
-      "",
-      "Examples:",
-      "  read 02ed                          # all entries (~2000 words)",
-      "  read 02ed --target 500             # tighter truncation",
-      "  read 02ed --skip 50                # skip first 50 words per field",
-      "  read 02ed 5                        # entry 5 (full content)",
-      "  read 02ed 10-20                    # entries 10 through 20",
-      "  read 02ed --show thinking          # show full thinking content",
-      "  read 02ed --show tool:Bash:result  # show Bash command results",
-      "  read 02ed --hide user              # redact user messages to word counts"
-    ].join(`
-`);
-  },
-  search: () => {
-    return [
-      "Usage: search <pattern> [-i] [-c] [-l] [-m N] [-C N] [-s <session>] [--in <fields>]",
-      "                        [--after <time>] [--before <time>]",
-      "",
-      "Search sessions for a pattern (JavaScript regex).",
-      "Use -- to separate options from pattern if needed.",
-      "",
-      "Options:",
-      "  -i              Case insensitive search",
-      "  -c              Count matches per session only",
-      "  -l              List matching session IDs only",
-      "  -m N            Stop after N total matches",
-      "  -C N            Show N words of context around match (default: 10)",
-      "  -s <session>    Search only in specified session (prefix match)",
-      "  --in <fields>   Search only specified fields (comma-separated)",
-      "  --after <time>  Include only results after this time",
-      "  --before <time> Include only results before this time",
-      "",
-      "Time formats:",
-      "  Relative: 30m (30 min ago), 2h (2 hours), 7d (7 days), 1w (1 week)",
-      "  Absolute: 2025-01-10, 2025-01-10T14:00, 2025-01-10T14:00:00Z",
-      "",
-      "Field specifiers:",
-      "  user, assistant, thinking, system, summary",
-      "  tool:input, tool:result, tool:<name>:input, tool:<name>:result",
-      "",
-      "Default fields: user, assistant, thinking, tool:input, system, summary",
-      "",
-      "Examples:",
-      '  search "TODO"                    # find TODO in sessions',
-      '  search -i "error" -C 20          # case insensitive, 20 words context',
-      '  search -c "function"             # count matches per session',
-      '  search -l "#2597"                # list sessions mentioning issue',
-      '  search -s 02ed "bug"             # search only in session 02ed...',
-      '  search "error|warning|bug"       # find any of these terms (OR)',
-      '  search "TODO|FIXME|XXX"          # find code comments',
-      '  search --in tool:result "error"  # search only in tool results',
-      '  search --in user,assistant "fix" # search only user and assistant',
-      '  search --after 2d "error"        # errors in last 2 days',
-      '  search --after 2025-01-01 "fix"  # fixes since Jan 1'
-    ].join(`
-`);
-  },
-  index: () => {
-    return [
-      "Usage: index",
-      "",
-      "List extracted sessions with statistics and summaries.",
-      "Agent sessions are excluded (explore via Task tool calls in parent sessions).",
-      "Statistics include work from subagent sessions.",
-      "",
-      "Output columns:",
-      "  ID                    Session ID prefix",
-      "  DATETIME              Session modification time",
-      "  MSGS                  Total message count",
-      "  USER_MESSAGES         User message count",
-      "  BASH_CALLS            Bash commands executed",
-      "  WEB_FETCHES           Web fetches",
-      "  WEB_SEARCHES          Web searches",
-      "  LINES_ADDED           Lines added",
-      "  LINES_REMOVED         Lines removed",
-      "  FILES_TOUCHED         Files modified",
-      "  SIGNIFICANT_LOCATIONS Paths where >30% of work happened",
-      "  SUMMARY               Session summary or first prompt",
-      "  COMMITS               Git commits from the session"
-    ].join(`
-`);
-  },
-  indexFull: () => {
-    return [
-      "Usage: index [--escape-file-refs] [--pending]",
-      "",
-      "List all extracted sessions with statistics, summary, and commits.",
-      "Agent sessions are excluded (explore via Task tool calls in parent sessions).",
-      "Statistics include work from subagent sessions.",
-      "",
-      "Options:",
-      "  --escape-file-refs  Escape @ symbols to prevent file reference interpretation",
-      "  --pending           Show upload eligibility status for each session",
-      "",
-      "Output columns:",
-      "  ID                   Session ID prefix (first 16 chars)",
-      "  DATETIME             Session modification time",
-      "  MSGS                 Total message count",
-      "  USER_MESSAGES        User message count",
-      "  BASH_CALLS           Bash commands executed",
-      "  WEB_FETCHES          Web fetches",
-      "  WEB_SEARCHES         Web searches",
-      "  LINES_ADDED          Lines added",
-      "  LINES_REMOVED        Lines removed",
-      "  FILES_TOUCHED        Number of unique files modified",
-      "  SIGNIFICANT_LOCATIONS Paths where >30% of work happened",
-      "  SUMMARY              Session summary or first user prompt",
-      "  COMMITS              Git commit hashes from the session"
-    ].join(`
-`);
-  },
-  upload: () => {
-    return [
-      "Usage: upload <session-id>... [--delay N]",
-      "",
-      "Upload one or more sessions to the shared knowledge base.",
-      "Use `index --pending` to see upload eligibility status."
-    ].join(`
-`);
-  }
-};
-var setup = {
-  header: "Join the hive-mind shared knowledge base",
-  alreadyLoggedIn: "You're already connected.",
-  confirmRelogin: "Do you want to reconnect?",
-  refreshing: "Refreshing your session...",
-  refreshSuccess: "Session refreshed!",
-  starting: "Starting authentication...",
-  deviceAuth: (url, code) => {
-    return ["Open this URL in your browser:", "", `  ${url}`, "", "Confirm this code matches:", "", `  ${code}`].join(`
-`);
-  },
-  browserOpened: "Browser opened. Confirm the code and approve.",
-  openManually: "Open the URL manually, then confirm the code.",
-  waiting: (seconds) => `Waiting for authentication... (expires in ${seconds}s)`,
-  waitingProgress: (elapsed) => `Waiting... (${elapsed}s elapsed)`,
-  success: "You're connected!",
-  welcome: (name, email) => name ? `Welcome, ${name} (${email})!` : `Logged in as: ${email}`,
-  consentInfo: (userHasAlias) => {
-    const cli = getCliCommand(userHasAlias);
-    return `Your sessions will contribute to the shared knowledge base.
-You'll have 24 hours to review sessions before auto-submission.
-Run \`${cli} exclude\` anytime to opt out.`;
-  },
-  consentConfirm: "Continue?",
-  consentDeclined: "Setup cancelled. Run setup again if you change your mind.",
-  timeout: "Authentication timed out. Please try again.",
-  startFailed: (error) => `Couldn't start authentication: ${error}`,
-  authFailed: (error) => `Authentication failed: ${error}`,
-  unexpectedAuthResponse: "Unexpected response from authentication server",
-  aliasPrompt: "Set up a command to run hive-mind more easily?",
-  aliasExplain: "This adds `alias hive-mind=...` to your shell config.",
-  aliasConfirm: "Set up hive-mind command?",
-  aliasSuccess: "Command added!",
-  aliasActivate: (sourceCmd) => `Run \`${sourceCmd}\` or restart your terminal to activate.`,
-  aliasFailed: "Couldn't add command automatically.",
-  alreadySetUp: "hive-mind command already set up"
-};
-var indexCmd = {
-  noSessionsDir: "No sessions found. Run 'extract' first.",
-  noSessionsIn: (dir) => `No sessions found in ${dir}`,
-  uploadStatus: "Upload eligibility status:",
-  noExtractedSessions: "No extracted sessions found.",
-  total: (count, summary) => `Total: ${count} sessions (${summary})`,
-  runUpload: "Run 'hive-mind upload' to upload ready sessions.",
-  excludeSession: "To exclude a session: hive-mind exclude <session-id>",
-  excludeAll: "To exclude all sessions: hive-mind exclude --all"
-};
-var excludeCmd = {
-  noSessionsDir: "No sessions directory found",
-  noSessions: "No sessions found.",
-  allAlreadyExcluded: "All sessions are already excluded.",
-  foundNonExcluded: (count) => `Found ${count} session(s) not yet excluded.`,
-  confirmExcludeAll: "Exclude all sessions from upload?",
-  cancelled: "Cancelled.",
-  excludedCount: (count) => `Excluded ${count} session(s)`,
-  failedCount: (count) => `Failed to exclude ${count} session(s)`,
-  sessionNotFound: (id) => `Session '${id}' not found`,
-  ambiguousSession: (id, count) => `Ambiguous session ID '${id}' matches ${count} sessions`,
-  matches: "Matches:",
-  couldNotRead: (id) => `Could not read session '${id}'`,
-  alreadyExcluded: (id) => `Session ${id} is already excluded`,
-  excluded: (id) => `Excluded session ${id}`,
-  failedToExclude: (id) => `Failed to exclude session ${id}`,
-  cannotExcludeAgent: "Agent sessions cannot be excluded directly. Exclude the parent session instead.",
-  usage: "Usage: hive-mind exclude <session-id> or hive-mind exclude --all",
-  excludedLine: (id) => `  \u2717 ${id} excluded`,
-  failedLine: (id) => `  ! ${id} failed`
-};
-var uploadCmd = {
-  notAuthenticated: "Not authenticated. Run 'hive-mind setup' first.",
-  waitingDelay: (seconds) => `Waiting ${seconds} seconds before upload...`,
-  sessionNotFound: (id) => `Session '${id}' not found`,
-  ambiguousSession: (id, count) => `Multiple sessions match '${id}' (${count} matches):`,
-  sessionExcluded: (id) => `Session ${id} was excluded, skipping`,
-  uploading: (id) => `Uploading ${id}...`,
-  uploaded: (id) => `Uploaded ${id}`,
-  uploadedWithAgents: (id, agentCount) => `Uploaded ${id} (+${agentCount} agent${agentCount === 1 ? "" : "s"})`,
-  failedToUpload: (id, error) => `Failed to upload ${id}: ${error}`,
-  checking: "Checking for sessions ready to upload...",
-  noExtractedSessions: "No extracted sessions found.",
-  sessionsHeader: "Sessions:",
-  noSessionsReady: "No sessions ready for upload.",
-  pendingCount: (count) => `${count} session(s) still in review period.`,
-  readyCount: (count) => `${count} session(s) ready for upload.`,
-  confirmUpload: "Upload these sessions?",
-  cancelled: "Cancelled.",
-  uploadedCount: (count) => `Uploaded ${count} session(s)`,
-  failedCount: (count) => `Failed to upload ${count} session(s)`,
-  done: "done",
-  failed: (error) => `failed: ${error}`
-};
-
-// cli/lib/secret-rules.ts
-var SECRET_RULES = [
-  {
-    id: "1password-secret-key",
-    regex: new RegExp(`\\bA3-[A-Z0-9]{6}-(?:(?:[A-Z0-9]{11})|(?:[A-Z0-9]{6}-[A-Z0-9]{5}))-[A-Z0-9]{5}-[A-Z0-9]{5}-[A-Z0-9]{5}\\b`, "gi"),
-    entropy: 3.8,
-    keywords: ["a3-"]
-  },
-  {
-    id: "1password-service-account-token",
-    regex: new RegExp(`ops_eyJ[a-zA-Z0-9+/]{250,}={0,3}`, "gi"),
-    entropy: 4,
-    keywords: ["ops_"]
-  },
-  {
-    id: "adafruit-api-key",
-    regex: new RegExp(`[\\w.-]{0,50}?(?:adafruit)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}([a-z0-9_-]{32})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
-    keywords: ["adafruit"]
-  },
-  {
-    id: "adobe-client-id",
-    regex: new RegExp(`[\\w.-]{0,50}?(?:adobe)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}([a-f0-9]{32})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
-    entropy: 2,
-    keywords: ["adobe"]
-  },
-  {
-    id: "adobe-client-secret",
-    regex: new RegExp(`\\b(p8e-[a-z0-9]{32})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
-    entropy: 2,
-    keywords: ["p8e-"]
-  },
-  {
-    id: "age-secret-key",
-    regex: new RegExp(`AGE-SECRET-KEY-1[QPZRY9X8GF2TVDW0S3JN54KHCE6MUA7L]{58}`, "gi"),
-    keywords: ["age-secret-key-1"]
-  },
-  {
-    id: "airtable-api-key",
-    regex: new RegExp(`[\\w.-]{0,50}?(?:airtable)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}([a-z0-9]{17})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
-    keywords: ["airtable"]
-  },
-  {
-    id: "airtable-personnal-access-token",
-    regex: new RegExp(`\\b(pat[a-zA-Z0-9]{14}\\.[a-f0-9]{64})\\b`, "gi"),
-    keywords: ["airtable"]
-  },
-  {
-    id: "algolia-api-key",
-    regex: new RegExp(`[\\w.-]{0,50}?(?:algolia)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}([a-z0-9]{32})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
-    keywords: ["algolia"]
-  },
-  {
-    id: "alibaba-access-key-id",
-    regex: new RegExp(`\\b(LTAI[a-z0-9]{20})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
-    entropy: 2,
-    keywords: ["ltai"]
-  },
-  {
-    id: "alibaba-secret-key",
-    regex: new RegExp(`[\\w.-]{0,50}?(?:alibaba)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}([a-z0-9]{30})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
-    entropy: 2,
-    keywords: ["alibaba"]
-  },
-  {
-    id: "anthropic-admin-api-key",
-    regex: new RegExp(`\\b(sk-ant-admin01-[a-zA-Z0-9_\\-]{93}AA)(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
-    keywords: ["sk-ant-admin01"]
-  },
-  {
-    id: "anthropic-api-key",
-    regex: new RegExp(`\\b(sk-ant-api03-[a-zA-Z0-9_\\-]{93}AA)(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
-    keywords: ["sk-ant-api03"]
-  },
-  { id: "artifactory-api-key", regex: new RegExp(`\\bAKCp[A-Za-z0-9]{69}\\b`, "gi"), entropy: 4.5, keywords: ["akcp"] },
-  {
-    id: "artifactory-reference-token",
-    regex: new RegExp(`\\bcmVmd[A-Za-z0-9]{59}\\b`, "gi"),
-    entropy: 4.5,
-    keywords: ["cmvmd"]
-  },
-  {
-    id: "asana-client-id",
-    regex: new RegExp(`[\\w.-]{0,50}?(?:asana)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}([0-9]{16})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
-    keywords: ["asana"]
-  },
-  {
-    id: "asana-client-secret",
-    regex: new RegExp(`[\\w.-]{0,50}?(?:asana)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}([a-z0-9]{32})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
-    keywords: ["asana"]
-  },
-  {
-    id: "atlassian-api-token",
-    regex: new RegExp(`[\\w.-]{0,50}?(?:(?:ATLASSIAN|[Aa]tlassian)|(?:CONFLUENCE|[Cc]onfluence)|(?:JIRA|[Jj]ira))(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}([a-z0-9]{20}[a-f0-9]{4})(?:[\\x60'"\\s;]|\\\\[nr]|$)|\\b(ATATT3[A-Za-z0-9_\\-=]{186})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
-    entropy: 3.5,
-    keywords: ["atlassian", "confluence", "jira", "atatt3"]
-  },
-  {
-    id: "authress-service-client-access-key",
-    regex: new RegExp(`\\b((?:sc|ext|scauth|authress)_[a-z0-9]{5,30}\\.[a-z0-9]{4,6}\\.(?:acc)[_-][a-z0-9-]{10,32}\\.[a-z0-9+/_=-]{30,120})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
-    entropy: 2,
-    keywords: ["sc_", "ext_", "scauth_", "authress_"]
-  },
-  {
-    id: "aws-access-token",
-    regex: new RegExp(`\\b((?:A3T[A-Z0-9]|AKIA|ASIA|ABIA|ACCA)[A-Z2-7]{16})\\b`, "gi"),
-    entropy: 3,
-    keywords: ["a3t", "akia", "asia", "abia", "acca"]
-  },
-  {
-    id: "aws-amazon-bedrock-api-key-long-lived",
-    regex: new RegExp(`\\b(ABSK[A-Za-z0-9+/]{109,269}={0,2})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
-    entropy: 3,
-    keywords: ["absk"]
-  },
-  {
-    id: "aws-amazon-bedrock-api-key-short-lived",
-    regex: new RegExp(`bedrock-api-key-YmVkcm9jay5hbWF6b25hd3MuY29t`, "gi"),
-    entropy: 3,
-    keywords: ["bedrock-api-key-"]
-  },
-  {
-    id: "azure-ad-client-secret",
-    regex: new RegExp(`(?:^|[\\\\'"\\x60\\s>=:(,)])([a-zA-Z0-9_~.]{3}\\dQ~[a-zA-Z0-9_~.-]{31,34})(?:$|[\\\\'"\\x60\\s<),])`, "gi"),
-    entropy: 3,
-    keywords: ["q~"]
-  },
-  {
-    id: "beamer-api-token",
-    regex: new RegExp(`[\\w.-]{0,50}?(?:beamer)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}(b_[a-z0-9=_\\-]{44})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
-    keywords: ["beamer"]
-  },
-  {
-    id: "bitbucket-client-id",
-    regex: new RegExp(`[\\w.-]{0,50}?(?:bitbucket)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}([a-z0-9]{32})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
-    keywords: ["bitbucket"]
-  },
-  {
-    id: "bitbucket-client-secret",
-    regex: new RegExp(`[\\w.-]{0,50}?(?:bitbucket)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}([a-z0-9=_\\-]{64})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
-    keywords: ["bitbucket"]
-  },
-  {
-    id: "bittrex-access-key",
-    regex: new RegExp(`[\\w.-]{0,50}?(?:bittrex)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}([a-z0-9]{32})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
-    keywords: ["bittrex"]
-  },
-  {
-    id: "bittrex-secret-key",
-    regex: new RegExp(`[\\w.-]{0,50}?(?:bittrex)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}([a-z0-9]{32})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
-    keywords: ["bittrex"]
-  },
-  {
-    id: "cisco-meraki-api-key",
-    regex: new RegExp(`[\\w.-]{0,50}?(?:[\\w.-]{0,50}?(?:(?:[Mm]eraki|MERAKI))(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3})(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}([0-9a-f]{40})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
-    entropy: 3,
-    keywords: ["meraki"]
-  },
-  {
-    id: "clickhouse-cloud-api-secret-key",
-    regex: new RegExp(`\\b(4b1d[A-Za-z0-9]{38})\\b`, "gi"),
-    entropy: 3,
-    keywords: ["4b1d"]
-  },
-  { id: "clojars-api-token", regex: new RegExp(`CLOJARS_[a-z0-9]{60}`, "gi"), entropy: 2, keywords: ["clojars_"] },
-  {
-    id: "cloudflare-api-key",
-    regex: new RegExp(`[\\w.-]{0,50}?(?:cloudflare)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}([a-z0-9_-]{40})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
-    entropy: 2,
-    keywords: ["cloudflare"]
-  },
-  {
-    id: "cloudflare-global-api-key",
-    regex: new RegExp(`[\\w.-]{0,50}?(?:cloudflare)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}([a-f0-9]{37})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
-    entropy: 2,
-    keywords: ["cloudflare"]
-  },
-  {
-    id: "cloudflare-origin-ca-key",
-    regex: new RegExp(`\\b(v1\\.0-[a-f0-9]{24}-[a-f0-9]{146})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
-    entropy: 2,
-    keywords: ["cloudflare", "v1.0-"]
-  },
-  {
-    id: "codecov-access-token",
-    regex: new RegExp(`[\\w.-]{0,50}?(?:codecov)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}([a-z0-9]{32})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
-    keywords: ["codecov"]
-  },
-  {
-    id: "cohere-api-token",
-    regex: new RegExp(`[\\w.-]{0,50}?(?:[\\w.-]{0,50}?(?:cohere|CO_API_KEY)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3})(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}([a-zA-Z0-9]{40})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
-    entropy: 4,
-    keywords: ["cohere", "co_api_key"]
-  },
-  {
-    id: "coinbase-access-token",
-    regex: new RegExp(`[\\w.-]{0,50}?(?:coinbase)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}([a-z0-9_-]{64})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
-    keywords: ["coinbase"]
-  },
-  {
-    id: "confluent-access-token",
-    regex: new RegExp(`[\\w.-]{0,50}?(?:confluent)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}([a-z0-9]{16})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
-    keywords: ["confluent"]
-  },
-  {
-    id: "confluent-secret-key",
-    regex: new RegExp(`[\\w.-]{0,50}?(?:confluent)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}([a-z0-9]{64})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
-    keywords: ["confluent"]
-  },
-  {
-    id: "contentful-delivery-api-token",
-    regex: new RegExp(`[\\w.-]{0,50}?(?:contentful)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}([a-z0-9=_\\-]{43})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
-    keywords: ["contentful"]
-  },
-  {
-    id: "curl-auth-header",
-    regex: new RegExp(`\\bcurl\\b(?:.*?|.*?(?:[\\r\\n]{1,2}.*?){1,5})[ \\t\\n\\r](?:-H|--header)(?:=|[ \\t]{0,5})(?:"(?:Authorization:[ \\t]{0,5}(?:Basic[ \\t]([a-z0-9+/]{8,}={0,3})|(?:Bearer|(?:Api-)?Token)[ \\t]([\\w=~@.+/-]{8,})|([\\w=~@.+/-]{8,}))|(?:(?:X-(?:[a-z]+-)?)?(?:Api-?)?(?:Key|Token)):[ \\t]{0,5}([\\w=~@.+/-]{8,}))"|'(?:Authorization:[ \\t]{0,5}(?:Basic[ \\t]([a-z0-9+/]{8,}={0,3})|(?:Bearer|(?:Api-)?Token)[ \\t]([\\w=~@.+/-]{8,})|([\\w=~@.+/-]{8,}))|(?:(?:X-(?:[a-z]+-)?)?(?:Api-?)?(?:Key|Token)):[ \\t]{0,5}([\\w=~@.+/-]{8,}))')(?:\\B|\\s|$)`, "gi"),
-    entropy: 2.75,
-    keywords: ["curl"]
-  },
-  {
-    id: "curl-auth-user",
-    regex: new RegExp(`\\bcurl\\b(?:.*|.*(?:[\\r\\n]{1,2}.*){1,5})[ \\t\\n\\r](?:-u|--user)(?:=|[ \\t]{0,5})("(:[^"]{3,}|[^:"]{3,}:|[^:"]{3,}:[^"]{3,})"|'([^:']{3,}:[^']{3,})'|((?:"[^"]{3,}"|'[^']{3,}'|[\\w$@.-]+):(?:"[^"]{3,}"|'[^']{3,}'|[\\w\${}@.-]+)))(?:\\s|$)`, "gi"),
-    entropy: 2,
-    keywords: ["curl"]
-  },
-  {
-    id: "databricks-api-token",
-    regex: new RegExp(`\\b(dapi[a-f0-9]{32}(?:-\\d)?)(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
-    entropy: 3,
-    keywords: ["dapi"]
-  },
-  {
-    id: "datadog-access-token",
-    regex: new RegExp(`[\\w.-]{0,50}?(?:datadog)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}([a-z0-9]{40})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
-    keywords: ["datadog"]
-  },
-  {
-    id: "defined-networking-api-token",
-    regex: new RegExp(`[\\w.-]{0,50}?(?:dnkey)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}(dnkey-[a-z0-9=_\\-]{26}-[a-z0-9=_\\-]{52})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
-    keywords: ["dnkey"]
-  },
-  {
-    id: "digitalocean-access-token",
-    regex: new RegExp(`\\b(doo_v1_[a-f0-9]{64})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
-    entropy: 3,
-    keywords: ["doo_v1_"]
-  },
-  {
-    id: "digitalocean-pat",
-    regex: new RegExp(`\\b(dop_v1_[a-f0-9]{64})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
-    entropy: 3,
-    keywords: ["dop_v1_"]
-  },
-  {
-    id: "digitalocean-refresh-token",
-    regex: new RegExp(`\\b(dor_v1_[a-f0-9]{64})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
-    keywords: ["dor_v1_"]
-  },
-  {
-    id: "discord-api-token",
-    regex: new RegExp(`[\\w.-]{0,50}?(?:discord)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}([a-f0-9]{64})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
-    keywords: ["discord"]
-  },
-  {
-    id: "discord-client-id",
-    regex: new RegExp(`[\\w.-]{0,50}?(?:discord)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}([0-9]{18})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
-    entropy: 2,
-    keywords: ["discord"]
-  },
-  {
-    id: "discord-client-secret",
-    regex: new RegExp(`[\\w.-]{0,50}?(?:discord)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}([a-z0-9=_\\-]{32})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
-    entropy: 2,
-    keywords: ["discord"]
-  },
-  { id: "doppler-api-token", regex: new RegExp(`dp\\.pt\\.[a-z0-9]{43}`, "gi"), entropy: 2, keywords: ["dp.pt."] },
-  {
-    id: "droneci-access-token",
-    regex: new RegExp(`[\\w.-]{0,50}?(?:droneci)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}([a-z0-9]{32})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
-    keywords: ["droneci"]
-  },
-  {
-    id: "dropbox-api-token",
-    regex: new RegExp(`[\\w.-]{0,50}?(?:dropbox)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}([a-z0-9]{15})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
-    keywords: ["dropbox"]
-  },
-  {
-    id: "dropbox-long-lived-api-token",
-    regex: new RegExp(`[\\w.-]{0,50}?(?:dropbox)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}([a-z0-9]{11}(AAAAAAAAAA)[a-z0-9\\-_=]{43})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
-    keywords: ["dropbox"]
-  },
-  {
-    id: "dropbox-short-lived-api-token",
-    regex: new RegExp(`[\\w.-]{0,50}?(?:dropbox)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}(sl\\.[a-z0-9\\-=_]{135})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
-    keywords: ["dropbox"]
-  },
-  {
-    id: "duffel-api-token",
-    regex: new RegExp(`duffel_(?:test|live)_[a-z0-9_\\-=]{43}`, "gi"),
-    entropy: 2,
-    keywords: ["duffel_"]
-  },
-  {
-    id: "dynatrace-api-token",
-    regex: new RegExp(`dt0c01\\.[a-z0-9]{24}\\.[a-z0-9]{64}`, "gi"),
-    entropy: 4,
-    keywords: ["dt0c01."]
-  },
-  { id: "easypost-api-token", regex: new RegExp(`\\bEZAK[a-z0-9]{54}\\b`, "gi"), entropy: 2, keywords: ["ezak"] },
-  { id: "easypost-test-api-token", regex: new RegExp(`\\bEZTK[a-z0-9]{54}\\b`, "gi"), entropy: 2, keywords: ["eztk"] },
-  {
-    id: "etsy-access-token",
-    regex: new RegExp(`[\\w.-]{0,50}?(?:(?:ETSY|[Ee]tsy))(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}([a-z0-9]{24})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
-    entropy: 3,
-    keywords: ["etsy"]
-  },
-  {
-    id: "facebook-access-token",
-    regex: new RegExp(`\\b(\\d{15,16}(\\||%)[0-9a-z\\-_]{27,40})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
-    entropy: 3,
-    keywords: ["facebook"]
-  },
-  {
-    id: "facebook-page-access-token",
-    regex: new RegExp(`\\b(EAA[MC][a-z0-9]{100,})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
-    entropy: 4,
-    keywords: ["eaam", "eaac"]
-  },
-  {
-    id: "facebook-secret",
-    regex: new RegExp(`[\\w.-]{0,50}?(?:facebook)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}([a-f0-9]{32})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
-    entropy: 3,
-    keywords: ["facebook"]
-  },
-  {
-    id: "fastly-api-token",
-    regex: new RegExp(`[\\w.-]{0,50}?(?:fastly)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}([a-z0-9=_\\-]{32})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
-    keywords: ["fastly"]
-  },
-  {
-    id: "finicity-api-token",
-    regex: new RegExp(`[\\w.-]{0,50}?(?:finicity)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}([a-f0-9]{32})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
-    keywords: ["finicity"]
-  },
-  {
-    id: "finicity-client-secret",
-    regex: new RegExp(`[\\w.-]{0,50}?(?:finicity)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}([a-z0-9]{20})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
-    keywords: ["finicity"]
-  },
-  {
-    id: "finnhub-access-token",
-    regex: new RegExp(`[\\w.-]{0,50}?(?:finnhub)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}([a-z0-9]{20})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
-    keywords: ["finnhub"]
-  },
-  {
-    id: "flickr-access-token",
-    regex: new RegExp(`[\\w.-]{0,50}?(?:flickr)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}([a-z0-9]{32})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
-    keywords: ["flickr"]
-  },
-  {
-    id: "flutterwave-encryption-key",
-    regex: new RegExp(`FLWSECK_TEST-[a-h0-9]{12}`, "gi"),
-    entropy: 2,
-    keywords: ["flwseck_test"]
-  },
-  {
-    id: "flutterwave-public-key",
-    regex: new RegExp(`FLWPUBK_TEST-[a-h0-9]{32}-X`, "gi"),
-    entropy: 2,
-    keywords: ["flwpubk_test"]
-  },
-  {
-    id: "flutterwave-secret-key",
-    regex: new RegExp(`FLWSECK_TEST-[a-h0-9]{32}-X`, "gi"),
-    entropy: 2,
-    keywords: ["flwseck_test"]
-  },
-  {
-    id: "flyio-access-token",
-    regex: new RegExp(`\\b((?:fo1_[\\w-]{43}|fm1[ar]_[a-zA-Z0-9+\\/]{100,}={0,3}|fm2_[a-zA-Z0-9+\\/]{100,}={0,3}))(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
-    entropy: 4,
-    keywords: ["fo1_", "fm1", "fm2_"]
-  },
-  { id: "frameio-api-token", regex: new RegExp(`fio-u-[a-z0-9\\-_=]{64}`, "gi"), keywords: ["fio-u-"] },
-  {
-    id: "freemius-secret-key",
-    regex: new RegExp(`["']secret_key["']\\s*=>\\s*["'](sk_[\\S]{29})["']`, "gi"),
-    keywords: ["secret_key"]
-  },
-  {
-    id: "freshbooks-access-token",
-    regex: new RegExp(`[\\w.-]{0,50}?(?:freshbooks)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}([a-z0-9]{64})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
-    keywords: ["freshbooks"]
-  },
-  {
-    id: "gcp-api-key",
-    regex: new RegExp(`\\b(AIza[\\w-]{35})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
-    entropy: 4,
-    keywords: ["aiza"]
-  },
-  {
-    id: "generic-api-key",
-    regex: new RegExp(`[\\w.-]{0,50}?(?:access|auth|(?:[Aa]pi|API)|credential|creds|key|passw(?:or)?d|secret|token)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}([\\w.=-]{10,150}|[a-z0-9][a-z0-9+/]{11,}={0,3})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
-    entropy: 3.5,
-    keywords: ["access", "api", "auth", "key", "credential", "creds", "passwd", "password", "secret", "token"]
-  },
-  {
-    id: "github-app-token",
-    regex: new RegExp(`(?:ghu|ghs)_[0-9a-zA-Z]{36}`, "gi"),
-    entropy: 3,
-    keywords: ["ghu_", "ghs_"]
-  },
-  {
-    id: "github-fine-grained-pat",
-    regex: new RegExp(`github_pat_\\w{82}`, "gi"),
-    entropy: 3,
-    keywords: ["github_pat_"]
-  },
-  { id: "github-oauth", regex: new RegExp(`gho_[0-9a-zA-Z]{36}`, "gi"), entropy: 3, keywords: ["gho_"] },
-  { id: "github-pat", regex: new RegExp(`ghp_[0-9a-zA-Z]{36}`, "gi"), entropy: 3, keywords: ["ghp_"] },
-  { id: "github-refresh-token", regex: new RegExp(`ghr_[0-9a-zA-Z]{36}`, "gi"), entropy: 3, keywords: ["ghr_"] },
-  {
-    id: "gitlab-cicd-job-token",
-    regex: new RegExp(`glcbt-[0-9a-zA-Z]{1,5}_[0-9a-zA-Z_-]{20}`, "gi"),
-    entropy: 3,
-    keywords: ["glcbt-"]
-  },
-  { id: "gitlab-deploy-token", regex: new RegExp(`gldt-[0-9a-zA-Z_\\-]{20}`, "gi"), entropy: 3, keywords: ["gldt-"] },
-  {
-    id: "gitlab-feature-flag-client-token",
-    regex: new RegExp(`glffct-[0-9a-zA-Z_\\-]{20}`, "gi"),
-    entropy: 3,
-    keywords: ["glffct-"]
-  },
-  { id: "gitlab-feed-token", regex: new RegExp(`glft-[0-9a-zA-Z_\\-]{20}`, "gi"), entropy: 3, keywords: ["glft-"] },
-  {
-    id: "gitlab-incoming-mail-token",
-    regex: new RegExp(`glimt-[0-9a-zA-Z_\\-]{25}`, "gi"),
-    entropy: 3,
-    keywords: ["glimt-"]
-  },
-  {
-    id: "gitlab-kubernetes-agent-token",
-    regex: new RegExp(`glagent-[0-9a-zA-Z_\\-]{50}`, "gi"),
-    entropy: 3,
-    keywords: ["glagent-"]
-  },
-  {
-    id: "gitlab-oauth-app-secret",
-    regex: new RegExp(`gloas-[0-9a-zA-Z_\\-]{64}`, "gi"),
-    entropy: 3,
-    keywords: ["gloas-"]
-  },
-  { id: "gitlab-pat", regex: new RegExp(`glpat-[\\w-]{20}`, "gi"), entropy: 3, keywords: ["glpat-"] },
-  {
-    id: "gitlab-pat-routable",
-    regex: new RegExp(`\\bglpat-[0-9a-zA-Z_-]{27,300}\\.[0-9a-z]{2}[0-9a-z]{7}\\b`, "gi"),
-    entropy: 4,
-    keywords: ["glpat-"]
-  },
-  { id: "gitlab-ptt", regex: new RegExp(`glptt-[0-9a-f]{40}`, "gi"), entropy: 3, keywords: ["glptt-"] },
-  { id: "gitlab-rrt", regex: new RegExp(`GR1348941[\\w-]{20}`, "gi"), entropy: 3, keywords: ["gr1348941"] },
-  {
-    id: "gitlab-runner-authentication-token",
-    regex: new RegExp(`glrt-[0-9a-zA-Z_\\-]{20}`, "gi"),
-    entropy: 3,
-    keywords: ["glrt-"]
-  },
-  {
-    id: "gitlab-runner-authentication-token-routable",
-    regex: new RegExp(`\\bglrt-t\\d_[0-9a-zA-Z_\\-]{27,300}\\.[0-9a-z]{2}[0-9a-z]{7}\\b`, "gi"),
-    entropy: 4,
-    keywords: ["glrt-"]
-  },
-  { id: "gitlab-scim-token", regex: new RegExp(`glsoat-[0-9a-zA-Z_\\-]{20}`, "gi"), entropy: 3, keywords: ["glsoat-"] },
-  {
-    id: "gitlab-session-cookie",
-    regex: new RegExp(`_gitlab_session=[0-9a-z]{32}`, "gi"),
-    entropy: 3,
-    keywords: ["_gitlab_session="]
-  },
-  {
-    id: "gitter-access-token",
-    regex: new RegExp(`[\\w.-]{0,50}?(?:gitter)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}([a-z0-9_-]{40})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
-    keywords: ["gitter"]
-  },
-  {
-    id: "gocardless-api-token",
-    regex: new RegExp(`[\\w.-]{0,50}?(?:gocardless)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}(live_[a-z0-9\\-_=]{40})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
-    keywords: ["live_", "gocardless"]
-  },
-  {
-    id: "grafana-api-key",
-    regex: new RegExp(`\\b(eyJrIjoi[A-Za-z0-9]{70,400}={0,3})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
-    entropy: 3,
-    keywords: ["eyjrijoi"]
-  },
-  {
-    id: "grafana-cloud-api-token",
-    regex: new RegExp(`\\b(glc_[A-Za-z0-9+/]{32,400}={0,3})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
-    entropy: 3,
-    keywords: ["glc_"]
-  },
-  {
-    id: "grafana-service-account-token",
-    regex: new RegExp(`\\b(glsa_[A-Za-z0-9]{32}_[A-Fa-f0-9]{8})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
-    entropy: 3,
-    keywords: ["glsa_"]
-  },
-  {
-    id: "harness-api-key",
-    regex: new RegExp(`(?:pat|sat)\\.[a-zA-Z0-9_-]{22}\\.[a-zA-Z0-9]{24}\\.[a-zA-Z0-9]{20}`, "gi"),
-    keywords: ["pat.", "sat."]
-  },
-  {
-    id: "hashicorp-tf-api-token",
-    regex: new RegExp(`[a-z0-9]{14}\\.(?:atlasv1)\\.[a-z0-9\\-_=]{60,70}`, "gi"),
-    entropy: 3.5,
-    keywords: ["atlasv1"]
-  },
-  {
-    id: "hashicorp-tf-password",
-    regex: new RegExp(`[\\w.-]{0,50}?(?:administrator_login_password|password)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}("[a-z0-9=_\\-]{8,20}")(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
-    entropy: 2,
-    keywords: ["administrator_login_password", "password"]
-  },
-  {
-    id: "heroku-api-key",
-    regex: new RegExp(`[\\w.-]{0,50}?(?:heroku)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
-    keywords: ["heroku"]
-  },
-  {
-    id: "heroku-api-key-v2",
-    regex: new RegExp(`\\b((HRKU-AA[0-9a-zA-Z_-]{58}))(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
-    entropy: 4,
-    keywords: ["hrku-aa"]
-  },
-  {
-    id: "hubspot-api-key",
-    regex: new RegExp(`[\\w.-]{0,50}?(?:hubspot)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}([0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
-    keywords: ["hubspot"]
-  },
-  {
-    id: "huggingface-access-token",
-    regex: new RegExp(`\\b(hf_(?:[a-z]{34}))(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
-    entropy: 2,
-    keywords: ["hf_"]
-  },
-  {
-    id: "huggingface-organization-api-token",
-    regex: new RegExp(`\\b(api_org_(?:[a-z]{34}))(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
-    entropy: 2,
-    keywords: ["api_org_"]
-  },
-  {
-    id: "infracost-api-token",
-    regex: new RegExp(`\\b(ico-[a-zA-Z0-9]{32})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
-    entropy: 3,
-    keywords: ["ico-"]
-  },
-  {
-    id: "intercom-api-key",
-    regex: new RegExp(`[\\w.-]{0,50}?(?:intercom)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}([a-z0-9=_\\-]{60})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
-    keywords: ["intercom"]
-  },
-  {
-    id: "intra42-client-secret",
-    regex: new RegExp(`\\b(s-s4t2(?:ud|af)-[abcdef0123456789]{64})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
-    entropy: 3,
-    keywords: ["intra", "s-s4t2ud-", "s-s4t2af-"]
-  },
-  {
-    id: "jfrog-api-key",
-    regex: new RegExp(`[\\w.-]{0,50}?(?:jfrog|artifactory|bintray|xray)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}([a-z0-9]{73})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
-    keywords: ["jfrog", "artifactory", "bintray", "xray"]
-  },
-  {
-    id: "jfrog-identity-token",
-    regex: new RegExp(`[\\w.-]{0,50}?(?:jfrog|artifactory|bintray|xray)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}([a-z0-9]{64})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
-    keywords: ["jfrog", "artifactory", "bintray", "xray"]
-  },
-  {
-    id: "jwt",
-    regex: new RegExp(`\\b(ey[a-zA-Z0-9]{17,}\\.ey[a-zA-Z0-9\\/\\\\_-]{17,}\\.(?:[a-zA-Z0-9\\/\\\\_-]{10,}={0,2})?)(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
-    entropy: 3,
-    keywords: ["ey"]
-  },
-  {
-    id: "kraken-access-token",
-    regex: new RegExp(`[\\w.-]{0,50}?(?:kraken)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}([a-z0-9\\/=_\\+\\-]{80,90})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
-    keywords: ["kraken"]
-  },
-  {
-    id: "kubernetes-secret-yaml",
-    regex: new RegExp(`(?:\\bkind:[ \\t]*["']?\\bsecret\\b["']?[\\s\\S]{0,200}?\\bdata:[\\s\\S]{0,100}?\\s+([\\w.-]+:(?:[ \\t]*(?:\\||>[-+]?)\\s+)?[ \\t]*(?:["']?[a-z0-9+/]{10,}={0,3}["']?|\\{\\{[ \\t\\w"|$:=,.-]+}}|""|''))|\\bdata:[\\s\\S]{0,100}?\\s+([\\w.-]+:(?:[ \\t]*(?:\\||>[-+]?)\\s+)?[ \\t]*(?:["']?[a-z0-9+/]{10,}={0,3}["']?|\\{\\{[ \\t\\w"|$:=,.-]+}}|""|''))[\\s\\S]{0,200}?\\bkind:[ \\t]*["']?\\bsecret\\b["']?)`, "gi"),
-    keywords: ["secret"]
-  },
-  {
-    id: "kucoin-access-token",
-    regex: new RegExp(`[\\w.-]{0,50}?(?:kucoin)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}([a-f0-9]{24})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
-    keywords: ["kucoin"]
-  },
-  {
-    id: "kucoin-secret-key",
-    regex: new RegExp(`[\\w.-]{0,50}?(?:kucoin)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
-    keywords: ["kucoin"]
-  },
-  {
-    id: "launchdarkly-access-token",
-    regex: new RegExp(`[\\w.-]{0,50}?(?:launchdarkly)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}([a-z0-9=_\\-]{40})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
-    keywords: ["launchdarkly"]
-  },
-  { id: "linear-api-key", regex: new RegExp(`lin_api_[a-z0-9]{40}`, "gi"), entropy: 2, keywords: ["lin_api_"] },
-  {
-    id: "linear-client-secret",
-    regex: new RegExp(`[\\w.-]{0,50}?(?:linear)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}([a-f0-9]{32})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
-    entropy: 2,
-    keywords: ["linear"]
-  },
-  {
-    id: "linkedin-client-id",
-    regex: new RegExp(`[\\w.-]{0,50}?(?:linked[_-]?in)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}([a-z0-9]{14})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
-    entropy: 2,
-    keywords: ["linkedin", "linked_in", "linked-in"]
-  },
-  {
-    id: "linkedin-client-secret",
-    regex: new RegExp(`[\\w.-]{0,50}?(?:linked[_-]?in)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}([a-z0-9]{16})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
-    entropy: 2,
-    keywords: ["linkedin", "linked_in", "linked-in"]
-  },
-  {
-    id: "lob-api-key",
-    regex: new RegExp(`[\\w.-]{0,50}?(?:lob)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}((live|test)_[a-f0-9]{35})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
-    keywords: ["test_", "live_"]
-  },
-  {
-    id: "lob-pub-api-key",
-    regex: new RegExp(`[\\w.-]{0,50}?(?:lob)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}((test|live)_pub_[a-f0-9]{31})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
-    keywords: ["test_pub", "live_pub", "_pub"]
-  },
-  {
-    id: "looker-client-id",
-    regex: new RegExp(`[\\w.-]{0,50}?(?:looker)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}([a-z0-9]{20})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
-    keywords: ["looker"]
-  },
-  {
-    id: "looker-client-secret",
-    regex: new RegExp(`[\\w.-]{0,50}?(?:looker)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}([a-z0-9]{24})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
-    keywords: ["looker"]
-  },
-  {
-    id: "mailchimp-api-key",
-    regex: new RegExp(`[\\w.-]{0,50}?(?:MailchimpSDK.initialize|mailchimp)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}([a-f0-9]{32}-us\\d\\d)(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
-    keywords: ["mailchimp"]
-  },
-  {
-    id: "mailgun-private-api-token",
-    regex: new RegExp(`[\\w.-]{0,50}?(?:mailgun)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}(key-[a-f0-9]{32})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
-    keywords: ["mailgun"]
-  },
-  {
-    id: "mailgun-pub-key",
-    regex: new RegExp(`[\\w.-]{0,50}?(?:mailgun)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}(pubkey-[a-f0-9]{32})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
-    keywords: ["mailgun"]
-  },
-  {
-    id: "mailgun-signing-key",
-    regex: new RegExp(`[\\w.-]{0,50}?(?:mailgun)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}([a-h0-9]{32}-[a-h0-9]{8}-[a-h0-9]{8})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
-    keywords: ["mailgun"]
-  },
-  {
-    id: "mapbox-api-token",
-    regex: new RegExp(`[\\w.-]{0,50}?(?:mapbox)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}(pk\\.[a-z0-9]{60}\\.[a-z0-9]{22})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
-    keywords: ["mapbox"]
-  },
-  {
-    id: "mattermost-access-token",
-    regex: new RegExp(`[\\w.-]{0,50}?(?:mattermost)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}([a-z0-9]{26})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
-    keywords: ["mattermost"]
-  },
-  {
-    id: "maxmind-license-key",
-    regex: new RegExp(`\\b([A-Za-z0-9]{6}_[A-Za-z0-9]{29}_mmk)(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
-    entropy: 4,
-    keywords: ["_mmk"]
-  },
-  {
-    id: "messagebird-api-token",
-    regex: new RegExp(`[\\w.-]{0,50}?(?:message[_-]?bird)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}([a-z0-9]{25})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
-    keywords: ["messagebird", "message-bird", "message_bird"]
-  },
-  {
-    id: "messagebird-client-id",
-    regex: new RegExp(`[\\w.-]{0,50}?(?:message[_-]?bird)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
-    keywords: ["messagebird", "message-bird", "message_bird"]
-  },
-  {
-    id: "microsoft-teams-webhook",
-    regex: new RegExp(`https://[a-z0-9]+\\.webhook\\.office\\.com/webhookb2/[a-z0-9]{8}-([a-z0-9]{4}-){3}[a-z0-9]{12}@[a-z0-9]{8}-([a-z0-9]{4}-){3}[a-z0-9]{12}/IncomingWebhook/[a-z0-9]{32}/[a-z0-9]{8}-([a-z0-9]{4}-){3}[a-z0-9]{12}`, "gi"),
-    keywords: ["webhook.office.com", "webhookb2", "incomingwebhook"]
-  },
-  {
-    id: "netlify-access-token",
-    regex: new RegExp(`[\\w.-]{0,50}?(?:netlify)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}([a-z0-9=_\\-]{40,46})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
-    keywords: ["netlify"]
-  },
-  {
-    id: "new-relic-browser-api-token",
-    regex: new RegExp(`[\\w.-]{0,50}?(?:new-relic|newrelic|new_relic)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}(NRJS-[a-f0-9]{19})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
-    keywords: ["nrjs-"]
-  },
-  {
-    id: "new-relic-insert-key",
-    regex: new RegExp(`[\\w.-]{0,50}?(?:new-relic|newrelic|new_relic)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}(NRII-[a-z0-9-]{32})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
-    keywords: ["nrii-"]
-  },
-  {
-    id: "new-relic-user-api-id",
-    regex: new RegExp(`[\\w.-]{0,50}?(?:new-relic|newrelic|new_relic)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}([a-z0-9]{64})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
-    keywords: ["new-relic", "newrelic", "new_relic"]
-  },
-  {
-    id: "new-relic-user-api-key",
-    regex: new RegExp(`[\\w.-]{0,50}?(?:new-relic|newrelic|new_relic)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}(NRAK-[a-z0-9]{27})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
-    keywords: ["nrak"]
-  },
-  {
-    id: "notion-api-token",
-    regex: new RegExp(`\\b(ntn_[0-9]{11}[A-Za-z0-9]{32}[A-Za-z0-9]{3})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
-    entropy: 4,
-    keywords: ["ntn_"]
-  },
-  {
-    id: "npm-access-token",
-    regex: new RegExp(`\\b(npm_[a-z0-9]{36})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
-    entropy: 2,
-    keywords: ["npm_"]
-  },
-  {
-    id: "nuget-config-password",
-    regex: new RegExp(`<add key=\\"(?:(?:ClearText)?Password)\\"\\s*value=\\"(.{8,})\\"\\s*/>`, "gi"),
-    entropy: 1,
-    keywords: ["<add key="]
-  },
-  {
-    id: "nytimes-access-token",
-    regex: new RegExp(`[\\w.-]{0,50}?(?:nytimes|new-york-times,|newyorktimes)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}([a-z0-9=_\\-]{32})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
-    keywords: ["nytimes", "new-york-times", "newyorktimes"]
-  },
-  {
-    id: "octopus-deploy-api-key",
-    regex: new RegExp(`\\b(API-[A-Z0-9]{26})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
-    entropy: 3,
-    keywords: ["api-"]
-  },
-  {
-    id: "okta-access-token",
-    regex: new RegExp(`[\\w.-]{0,50}?(?:[\\w.-]{0,50}?(?:(?:[Oo]kta|OKTA))(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3})(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}(00[\\w=\\-]{40})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
-    entropy: 4,
-    keywords: ["okta"]
-  },
-  {
-    id: "openai-api-key",
-    regex: new RegExp(`\\b(sk-(?:proj|svcacct|admin)-(?:[A-Za-z0-9_-]{74}|[A-Za-z0-9_-]{58})T3BlbkFJ(?:[A-Za-z0-9_-]{74}|[A-Za-z0-9_-]{58})\\b|sk-[a-zA-Z0-9]{20}T3BlbkFJ[a-zA-Z0-9]{20})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
-    entropy: 3,
-    keywords: ["t3blbkfj"]
-  },
-  {
-    id: "openshift-user-token",
-    regex: new RegExp(`\\b(sha256~[\\w-]{43})(?:[^\\w-]|$)`, "gi"),
-    entropy: 3.5,
-    keywords: ["sha256~"]
-  },
-  {
-    id: "perplexity-api-key",
-    regex: new RegExp(`\\b(pplx-[a-zA-Z0-9]{48})(?:[\\x60'"\\s;]|\\\\[nr]|$|\\b)`, "gi"),
-    entropy: 4,
-    keywords: ["pplx-"]
-  },
-  {
-    id: "plaid-api-token",
-    regex: new RegExp(`[\\w.-]{0,50}?(?:plaid)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}(access-(?:sandbox|development|production)-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
-    keywords: ["plaid"]
-  },
-  {
-    id: "plaid-client-id",
-    regex: new RegExp(`[\\w.-]{0,50}?(?:plaid)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}([a-z0-9]{24})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
-    entropy: 3.5,
-    keywords: ["plaid"]
-  },
-  {
-    id: "plaid-secret-key",
-    regex: new RegExp(`[\\w.-]{0,50}?(?:plaid)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}([a-z0-9]{30})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
-    entropy: 3.5,
-    keywords: ["plaid"]
-  },
-  {
-    id: "planetscale-api-token",
-    regex: new RegExp(`\\b(pscale_tkn_[\\w=\\.-]{32,64})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
-    entropy: 3,
-    keywords: ["pscale_tkn_"]
-  },
-  {
-    id: "planetscale-oauth-token",
-    regex: new RegExp(`\\b(pscale_oauth_[\\w=\\.-]{32,64})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
-    entropy: 3,
-    keywords: ["pscale_oauth_"]
-  },
-  {
-    id: "planetscale-password",
-    regex: new RegExp(`\\b(pscale_pw_[\\w=\\.-]{32,64})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
-    entropy: 3,
-    keywords: ["pscale_pw_"]
-  },
-  {
-    id: "postman-api-token",
-    regex: new RegExp(`\\b(PMAK-[a-f0-9]{24}\\-[a-f0-9]{34})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
-    entropy: 3,
-    keywords: ["pmak-"]
-  },
-  {
-    id: "prefect-api-token",
-    regex: new RegExp(`\\b(pnu_[a-zA-Z0-9]{36})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
-    entropy: 2,
-    keywords: ["pnu_"]
-  },
-  {
-    id: "private-key",
-    regex: new RegExp(`-----BEGIN[ A-Z0-9_-]{0,100}PRIVATE KEY(?: BLOCK)?-----[\\s\\S-]{64,}?KEY(?: BLOCK)?-----`, "gi"),
-    keywords: ["-----begin"]
-  },
-  {
-    id: "privateai-api-token",
-    regex: new RegExp(`[\\w.-]{0,50}?(?:[\\w.-]{0,50}?(?:private[_-]?ai)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3})(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}([a-z0-9]{32})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
-    entropy: 3,
-    keywords: ["privateai", "private_ai", "private-ai"]
-  },
-  {
-    id: "pulumi-api-token",
-    regex: new RegExp(`\\b(pul-[a-f0-9]{40})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
-    entropy: 2,
-    keywords: ["pul-"]
-  },
-  {
-    id: "pypi-upload-token",
-    regex: new RegExp(`pypi-AgEIcHlwaS5vcmc[\\w-]{50,1000}`, "gi"),
-    entropy: 3,
-    keywords: ["pypi-ageichlwas5vcmc"]
-  },
-  {
-    id: "rapidapi-access-token",
-    regex: new RegExp(`[\\w.-]{0,50}?(?:rapidapi)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}([a-z0-9_-]{50})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
-    keywords: ["rapidapi"]
-  },
-  {
-    id: "readme-api-token",
-    regex: new RegExp(`\\b(rdme_[a-z0-9]{70})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
-    entropy: 2,
-    keywords: ["rdme_"]
-  },
-  {
-    id: "rubygems-api-token",
-    regex: new RegExp(`\\b(rubygems_[a-f0-9]{48})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
-    entropy: 2,
-    keywords: ["rubygems_"]
-  },
-  {
-    id: "scalingo-api-token",
-    regex: new RegExp(`\\b(tk-us-[\\w-]{48})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
-    entropy: 2,
-    keywords: ["tk-us-"]
-  },
-  {
-    id: "sendbird-access-id",
-    regex: new RegExp(`[\\w.-]{0,50}?(?:sendbird)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
-    keywords: ["sendbird"]
-  },
-  {
-    id: "sendbird-access-token",
-    regex: new RegExp(`[\\w.-]{0,50}?(?:sendbird)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}([a-f0-9]{40})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
-    keywords: ["sendbird"]
-  },
-  {
-    id: "sendgrid-api-token",
-    regex: new RegExp(`\\b(SG\\.[a-z0-9=_\\-\\.]{66})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
-    entropy: 2,
-    keywords: ["sg."]
-  },
-  {
-    id: "sendinblue-api-token",
-    regex: new RegExp(`\\b(xkeysib-[a-f0-9]{64}\\-[a-z0-9]{16})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
-    entropy: 2,
-    keywords: ["xkeysib-"]
-  },
-  {
-    id: "sentry-access-token",
-    regex: new RegExp(`[\\w.-]{0,50}?(?:sentry)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}([a-f0-9]{64})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
-    entropy: 3,
-    keywords: ["sentry"]
-  },
-  {
-    id: "sentry-org-token",
-    regex: new RegExp(`\\bsntrys_eyJpYXQiO[a-zA-Z0-9+/]{10,200}(?:LCJyZWdpb25fdXJs|InJlZ2lvbl91cmwi|cmVnaW9uX3VybCI6)[a-zA-Z0-9+/]{10,200}={0,2}_[a-zA-Z0-9+/]{43}(?:[^a-zA-Z0-9+/]|$)`, "gi"),
-    entropy: 4.5,
-    keywords: ["sntrys_eyjpyxqio"]
-  },
-  {
-    id: "sentry-user-token",
-    regex: new RegExp(`\\b(sntryu_[a-f0-9]{64})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
-    entropy: 3.5,
-    keywords: ["sntryu_"]
-  },
-  {
-    id: "settlemint-application-access-token",
-    regex: new RegExp(`\\b(sm_aat_[a-zA-Z0-9]{16})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
-    entropy: 3,
-    keywords: ["sm_aat"]
-  },
-  {
-    id: "settlemint-personal-access-token",
-    regex: new RegExp(`\\b(sm_pat_[a-zA-Z0-9]{16})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
-    entropy: 3,
-    keywords: ["sm_pat"]
-  },
-  {
-    id: "settlemint-service-access-token",
-    regex: new RegExp(`\\b(sm_sat_[a-zA-Z0-9]{16})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
-    entropy: 3,
-    keywords: ["sm_sat"]
-  },
-  {
-    id: "shippo-api-token",
-    regex: new RegExp(`\\b(shippo_(?:live|test)_[a-fA-F0-9]{40})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
-    entropy: 2,
-    keywords: ["shippo_"]
-  },
-  { id: "shopify-access-token", regex: new RegExp(`shpat_[a-fA-F0-9]{32}`, "gi"), entropy: 2, keywords: ["shpat_"] },
-  {
-    id: "shopify-custom-access-token",
-    regex: new RegExp(`shpca_[a-fA-F0-9]{32}`, "gi"),
-    entropy: 2,
-    keywords: ["shpca_"]
-  },
-  {
-    id: "shopify-private-app-access-token",
-    regex: new RegExp(`shppa_[a-fA-F0-9]{32}`, "gi"),
-    entropy: 2,
-    keywords: ["shppa_"]
-  },
-  { id: "shopify-shared-secret", regex: new RegExp(`shpss_[a-fA-F0-9]{32}`, "gi"), entropy: 2, keywords: ["shpss_"] },
-  {
-    id: "sidekiq-secret",
-    regex: new RegExp(`[\\w.-]{0,50}?(?:BUNDLE_ENTERPRISE__CONTRIBSYS__COM|BUNDLE_GEMS__CONTRIBSYS__COM)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}([a-f0-9]{8}:[a-f0-9]{8})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
-    keywords: ["bundle_enterprise__contribsys__com", "bundle_gems__contribsys__com"]
-  },
-  {
-    id: "sidekiq-sensitive-url",
-    regex: new RegExp(`\\bhttps?://([a-f0-9]{8}:[a-f0-9]{8})@(?:gems.contribsys.com|enterprise.contribsys.com)(?:[\\/|\\#|\\?|:]|$)`, "gi"),
-    keywords: ["gems.contribsys.com", "enterprise.contribsys.com"]
-  },
-  {
-    id: "slack-app-token",
-    regex: new RegExp(`xapp-\\d-[A-Z0-9]+-\\d+-[a-z0-9]+`, "gi"),
-    entropy: 2,
-    keywords: ["xapp"]
-  },
-  {
-    id: "slack-bot-token",
-    regex: new RegExp(`xoxb-[0-9]{10,13}-[0-9]{10,13}[a-zA-Z0-9-]*`, "gi"),
-    entropy: 3,
-    keywords: ["xoxb"]
-  },
-  {
-    id: "slack-config-access-token",
-    regex: new RegExp(`xoxe.xox[bp]-\\d-[A-Z0-9]{163,166}`, "gi"),
-    entropy: 2,
-    keywords: ["xoxe.xoxb-", "xoxe.xoxp-"]
-  },
-  {
-    id: "slack-config-refresh-token",
-    regex: new RegExp(`xoxe-\\d-[A-Z0-9]{146}`, "gi"),
-    entropy: 2,
-    keywords: ["xoxe-"]
-  },
-  {
-    id: "slack-legacy-bot-token",
-    regex: new RegExp(`xoxb-[0-9]{8,14}-[a-zA-Z0-9]{18,26}`, "gi"),
-    entropy: 2,
-    keywords: ["xoxb"]
-  },
-  {
-    id: "slack-legacy-token",
-    regex: new RegExp(`xox[os]-\\d+-\\d+-\\d+-[a-fA-F\\d]+`, "gi"),
-    entropy: 2,
-    keywords: ["xoxo", "xoxs"]
-  },
-  {
-    id: "slack-legacy-workspace-token",
-    regex: new RegExp(`xox[ar]-(?:\\d-)?[0-9a-zA-Z]{8,48}`, "gi"),
-    entropy: 2,
-    keywords: ["xoxa", "xoxr"]
-  },
-  {
-    id: "slack-user-token",
-    regex: new RegExp(`xox[pe](?:-[0-9]{10,13}){3}-[a-zA-Z0-9-]{28,34}`, "gi"),
-    entropy: 2,
-    keywords: ["xoxp-", "xoxe-"]
-  },
-  {
-    id: "slack-webhook-url",
-    regex: new RegExp(`(?:https?://)?hooks.slack.com/(?:services|workflows|triggers)/[A-Za-z0-9+/]{43,56}`, "gi"),
-    keywords: ["hooks.slack.com"]
-  },
-  {
-    id: "snyk-api-token",
-    regex: new RegExp(`[\\w.-]{0,50}?(?:snyk[_.-]?(?:(?:api|oauth)[_.-]?)?(?:key|token))(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
-    keywords: ["snyk"]
-  },
-  {
-    id: "sonar-api-token",
-    regex: new RegExp(`[\\w.-]{0,50}?(?:sonar[_.-]?(login|token))(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}((?:squ_|sqp_|sqa_)?[a-z0-9=_\\-]{40})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
-    keywords: ["sonar"]
-  },
-  {
-    id: "sourcegraph-access-token",
-    regex: new RegExp(`\\b(\\b(sgp_(?:[a-fA-F0-9]{16}|local)_[a-fA-F0-9]{40}|sgp_[a-fA-F0-9]{40}|[a-fA-F0-9]{40})\\b)(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
-    entropy: 3,
-    keywords: ["sgp_", "sourcegraph"]
-  },
-  {
-    id: "square-access-token",
-    regex: new RegExp(`\\b((?:EAAA|sq0atp-)[\\w-]{22,60})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
-    entropy: 2,
-    keywords: ["sq0atp-", "eaaa"]
-  },
-  {
-    id: "squarespace-access-token",
-    regex: new RegExp(`[\\w.-]{0,50}?(?:squarespace)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
-    keywords: ["squarespace"]
-  },
-  {
-    id: "stripe-access-token",
-    regex: new RegExp(`\\b((?:sk|rk)_(?:test|live|prod)_[a-zA-Z0-9]{10,99})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
-    entropy: 2,
-    keywords: ["sk_test", "sk_live", "sk_prod", "rk_test", "rk_live", "rk_prod"]
-  },
-  {
-    id: "sumologic-access-id",
-    regex: new RegExp(`[\\w.-]{0,50}?(?:[\\w.-]{0,50}?(?:(?:[Ss]umo|SUMO))(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3})(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}(su[a-zA-Z0-9]{12})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
-    entropy: 3,
-    keywords: ["sumo"]
-  },
-  {
-    id: "sumologic-access-token",
-    regex: new RegExp(`[\\w.-]{0,50}?(?:(?:[Ss]umo|SUMO))(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}([a-z0-9]{64})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
-    entropy: 3,
-    keywords: ["sumo"]
-  },
-  {
-    id: "telegram-bot-api-token",
-    regex: new RegExp(`[\\w.-]{0,50}?(?:telegr)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}([0-9]{5,16}:(?:A)[a-z0-9_\\-]{34})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
-    keywords: ["telegr"]
-  },
-  {
-    id: "travisci-access-token",
-    regex: new RegExp(`[\\w.-]{0,50}?(?:travis)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}([a-z0-9]{22})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
-    keywords: ["travis"]
-  },
-  { id: "twilio-api-key", regex: new RegExp(`SK[0-9a-fA-F]{32}`, "gi"), entropy: 3, keywords: ["sk"] },
-  {
-    id: "twitch-api-token",
-    regex: new RegExp(`[\\w.-]{0,50}?(?:twitch)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}([a-z0-9]{30})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
-    keywords: ["twitch"]
-  },
-  {
-    id: "twitter-access-secret",
-    regex: new RegExp(`[\\w.-]{0,50}?(?:twitter)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}([a-z0-9]{45})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
-    keywords: ["twitter"]
-  },
-  {
-    id: "twitter-access-token",
-    regex: new RegExp(`[\\w.-]{0,50}?(?:twitter)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}([0-9]{15,25}-[a-zA-Z0-9]{20,40})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
-    keywords: ["twitter"]
-  },
-  {
-    id: "twitter-api-key",
-    regex: new RegExp(`[\\w.-]{0,50}?(?:twitter)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}([a-z0-9]{25})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
-    keywords: ["twitter"]
-  },
-  {
-    id: "twitter-api-secret",
-    regex: new RegExp(`[\\w.-]{0,50}?(?:twitter)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}([a-z0-9]{50})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
-    keywords: ["twitter"]
-  },
-  {
-    id: "twitter-bearer-token",
-    regex: new RegExp(`[\\w.-]{0,50}?(?:twitter)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}(A{22}[a-zA-Z0-9%]{80,100})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
-    keywords: ["twitter"]
-  },
-  {
-    id: "typeform-api-token",
-    regex: new RegExp(`[\\w.-]{0,50}?(?:typeform)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}(tfp_[a-z0-9\\-_\\.=]{59})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
-    keywords: ["tfp_"]
-  },
-  {
-    id: "vault-batch-token",
-    regex: new RegExp(`\\b(hvb\\.[\\w-]{138,300})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
-    entropy: 4,
-    keywords: ["hvb."]
-  },
-  {
-    id: "vault-service-token",
-    regex: new RegExp(`\\b((?:hvs\\.[\\w-]{90,120}|s\\.(?:[a-z0-9]{24})))(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
-    entropy: 3.5,
-    keywords: ["hvs.", "s."]
-  },
-  {
-    id: "yandex-access-token",
-    regex: new RegExp(`[\\w.-]{0,50}?(?:yandex)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}(t1\\.[A-Z0-9a-z_-]+[=]{0,2}\\.[A-Z0-9a-z_-]{86}[=]{0,2})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
-    keywords: ["yandex"]
-  },
-  {
-    id: "yandex-api-key",
-    regex: new RegExp(`[\\w.-]{0,50}?(?:yandex)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}(AQVN[A-Za-z0-9_\\-]{35,38})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
-    keywords: ["yandex"]
-  },
-  {
-    id: "yandex-aws-access-token",
-    regex: new RegExp(`[\\w.-]{0,50}?(?:yandex)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}(YC[a-zA-Z0-9_\\-]{38})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
-    keywords: ["yandex"]
-  },
-  {
-    id: "zendesk-secret-key",
-    regex: new RegExp(`[\\w.-]{0,50}?(?:zendesk)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}([a-z0-9]{40})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
-    keywords: ["zendesk"]
-  },
-  {
-    id: "high-entropy-secret",
-    regex: new RegExp(`(?<![A-Za-z0-9_\\-./+=])([A-Za-z0-9_\\-./+=]{20,200})(?![A-Za-z0-9_\\-./+=])`, "g"),
-    entropy: 4,
-    notHexOnly: true
-  }
-];
-var ALL_KEYWORDS = new Set([
-  "-----begin",
-  "4b1d",
-  "<add key=",
-  "_gitlab_session=",
-  "_mmk",
-  "_pub",
-  "a3-",
-  "a3t",
-  "abia",
-  "absk",
-  "acca",
-  "access",
-  "adafruit",
-  "administrator_login_password",
-  "adobe",
-  "age-secret-key-1",
-  "airtable",
-  "aiza",
-  "akcp",
-  "akia",
-  "algolia",
-  "alibaba",
-  "api",
-  "api-",
-  "api_org_",
-  "artifactory",
-  "asana",
-  "asia",
-  "atatt3",
-  "atlassian",
-  "atlasv1",
-  "auth",
-  "authress_",
-  "beamer",
-  "bedrock-api-key-",
-  "bintray",
-  "bitbucket",
-  "bittrex",
-  "bundle_enterprise__contribsys__com",
-  "bundle_gems__contribsys__com",
-  "clojars_",
-  "cloudflare",
-  "cmvmd",
-  "co_api_key",
-  "codecov",
-  "cohere",
-  "coinbase",
-  "confluence",
-  "confluent",
-  "contentful",
-  "credential",
-  "creds",
-  "curl",
-  "dapi",
-  "datadog",
-  "discord",
-  "dnkey",
-  "doo_v1_",
-  "dop_v1_",
-  "dor_v1_",
-  "dp.pt.",
-  "droneci",
-  "dropbox",
-  "dt0c01.",
-  "duffel_",
-  "eaaa",
-  "eaac",
-  "eaam",
-  "enterprise.contribsys.com",
-  "etsy",
-  "ext_",
-  "ey",
-  "eyjrijoi",
-  "ezak",
-  "eztk",
-  "facebook",
-  "fastly",
-  "finicity",
-  "finnhub",
-  "fio-u-",
-  "flickr",
-  "flwpubk_test",
-  "flwseck_test",
-  "fm1",
-  "fm2_",
-  "fo1_",
-  "freshbooks",
-  "gems.contribsys.com",
-  "gho_",
-  "ghp_",
-  "ghr_",
-  "ghs_",
-  "ghu_",
-  "github_pat_",
-  "gitter",
-  "glagent-",
-  "glc_",
-  "glcbt-",
-  "gldt-",
-  "glffct-",
-  "glft-",
-  "glimt-",
-  "gloas-",
-  "glpat-",
-  "glptt-",
-  "glrt-",
-  "glsa_",
-  "glsoat-",
-  "gocardless",
-  "gr1348941",
-  "heroku",
-  "hf_",
-  "hooks.slack.com",
-  "hrku-aa",
-  "hubspot",
-  "hvb.",
-  "hvs.",
-  "ico-",
-  "incomingwebhook",
-  "intercom",
-  "intra",
-  "jfrog",
-  "jira",
-  "key",
-  "kraken",
-  "kucoin",
-  "launchdarkly",
-  "lin_api_",
-  "linear",
-  "linked-in",
-  "linked_in",
-  "linkedin",
-  "live_",
-  "live_pub",
-  "looker",
-  "ltai",
-  "mailchimp",
-  "mailgun",
-  "mapbox",
-  "mattermost",
-  "meraki",
-  "message-bird",
-  "message_bird",
-  "messagebird",
-  "netlify",
-  "new-relic",
-  "new-york-times",
-  "new_relic",
-  "newrelic",
-  "newyorktimes",
-  "npm_",
-  "nrak",
-  "nrii-",
-  "nrjs-",
-  "ntn_",
-  "nytimes",
-  "okta",
-  "ops_",
-  "p8e-",
-  "passwd",
-  "password",
-  "pat.",
-  "plaid",
-  "pmak-",
-  "pnu_",
-  "pplx-",
-  "private-ai",
-  "private_ai",
-  "privateai",
-  "pscale_oauth_",
-  "pscale_pw_",
-  "pscale_tkn_",
-  "pul-",
-  "pypi-ageichlwas5vcmc",
-  "q~",
-  "rapidapi",
-  "rdme_",
-  "rk_live",
-  "rk_prod",
-  "rk_test",
-  "rubygems_",
-  "s-s4t2af-",
-  "s-s4t2ud-",
-  "s.",
-  "sat.",
-  "sc_",
-  "scauth_",
-  "secret",
-  "secret_key",
-  "sendbird",
-  "sentry",
-  "sg.",
-  "sgp_",
-  "sha256~",
-  "shippo_",
-  "shpat_",
-  "shpca_",
-  "shppa_",
-  "shpss_",
-  "sk",
-  "sk-ant-admin01",
-  "sk-ant-api03",
-  "sk_live",
-  "sk_prod",
-  "sk_test",
-  "sm_aat",
-  "sm_pat",
-  "sm_sat",
-  "sntrys_eyjpyxqio",
-  "sntryu_",
-  "snyk",
-  "sonar",
-  "sourcegraph",
-  "sq0atp-",
-  "squarespace",
-  "sumo",
-  "t3blbkfj",
-  "telegr",
-  "test_",
-  "test_pub",
-  "tfp_",
-  "tk-us-",
-  "token",
-  "travis",
-  "twitch",
-  "twitter",
-  "v1.0-",
-  "webhook.office.com",
-  "webhookb2",
-  "xapp",
-  "xkeysib-",
-  "xoxa",
-  "xoxb",
-  "xoxe-",
-  "xoxe.xoxb-",
-  "xoxe.xoxp-",
-  "xoxo",
-  "xoxp-",
-  "xoxr",
-  "xoxs",
-  "xray",
-  "yandex",
-  "zendesk",
-  "zxlk"
-]);
-
-// cli/lib/sanitize.ts
-var MAX_SANITIZE_DEPTH = 100;
-var MIN_SECRET_LENGTH = 8;
-var SAFE_KEYS = new Set([
-  "uuid",
-  "parentUuid",
-  "sessionId",
-  "tool_use_id",
-  "sourceToolUseID",
-  "id",
-  "type",
-  "role",
-  "subtype",
-  "level",
-  "stop_reason",
-  "timestamp",
-  "version",
-  "model",
-  "media_type",
-  "name",
-  "cwd",
-  "gitBranch"
-]);
-function mightContainSecrets(content) {
-  const lower = content.toLowerCase();
-  for (const keyword of ALL_KEYWORDS) {
-    if (lower.includes(keyword)) {
-      return true;
-    }
-  }
-  return false;
-}
-function shannonEntropy(data) {
-  if (!data)
-    return 0;
-  const charCounts = new Map;
-  for (const char of data) {
-    charCounts.set(char, (charCounts.get(char) || 0) + 1);
-  }
-  let entropy = 0;
-  const len = data.length;
-  for (const count of charCounts.values()) {
-    const freq = count / len;
-    entropy -= freq * Math.log2(freq);
-  }
-  return entropy;
-}
-function looksLikeFilePath(s) {
-  if (s.endsWith("/"))
-    return true;
-  return s.includes("/") && /\.\w{1,4}$/.test(s);
-}
-var _stats = { calls: 0, keywordHits: 0, regexRuns: 0, totalMs: 0 };
-function getDetectSecretsStats() {
-  return _stats;
-}
-function resetDetectSecretsStats() {
-  _stats = { calls: 0, keywordHits: 0, regexRuns: 0, totalMs: 0 };
-}
-function detectSecrets(content) {
-  const t0 = process.env.DEBUG ? performance.now() : 0;
-  _stats.calls++;
-  if (content.length < MIN_SECRET_LENGTH) {
-    return [];
-  }
-  const matches = [];
-  const lowerContent = content.toLowerCase();
-  const hasAnyKeyword = mightContainSecrets(content);
-  if (hasAnyKeyword)
-    _stats.keywordHits++;
-  for (const rule of SECRET_RULES) {
-    if (rule.keywords && rule.keywords.length > 0) {
-      if (!hasAnyKeyword)
-        continue;
-      const hasKeyword = rule.keywords.some((k) => lowerContent.includes(k));
-      if (!hasKeyword)
-        continue;
-    }
-    _stats.regexRuns++;
-    rule.regex.lastIndex = 0;
-    let match;
-    while ((match = rule.regex.exec(content)) !== null) {
-      const secretValue = match[1] || match[0];
-      const start = match.index;
-      const end = start + match[0].length;
-      const entropy = rule.entropy ? shannonEntropy(secretValue) : undefined;
-      if (rule.entropy && entropy !== undefined && entropy < rule.entropy) {
-        continue;
-      }
-      if (rule.notHexOnly && /^[0-9a-fA-F]+$/.test(secretValue)) {
-        continue;
-      }
-      if (rule.id === "high-entropy-secret" && looksLikeFilePath(secretValue)) {
-        continue;
-      }
-      matches.push({
-        ruleId: rule.id,
-        match: match[0],
-        start,
-        end,
-        entropy
-      });
-      if (match[0].length === 0) {
-        rule.regex.lastIndex++;
-      }
-    }
-  }
-  matches.sort((a, b) => a.start - b.start);
-  const deduped = [];
-  for (const m of matches) {
-    const last = deduped.at(-1);
-    if (last === undefined || m.start >= last.end) {
-      deduped.push(m);
-    }
-  }
-  if (process.env.DEBUG) {
-    _stats.totalMs += performance.now() - t0;
-  }
-  return deduped;
-}
-function sanitizeString(content) {
-  if (content.length < MIN_SECRET_LENGTH) {
-    return content;
-  }
-  const secrets = detectSecrets(content);
-  if (secrets.length === 0) {
-    return content;
-  }
-  let result = content;
-  for (let i = secrets.length - 1;i >= 0; i--) {
-    const secret = secrets[i];
-    result = `${result.slice(0, secret.start)}[REDACTED:${secret.ruleId}]${result.slice(secret.end)}`;
-  }
-  return result;
-}
-function sanitizeDeep(value, depth = 0) {
-  if (depth > MAX_SANITIZE_DEPTH)
-    return value;
-  if (value === null || value === undefined)
-    return value;
-  if (typeof value === "string")
-    return sanitizeString(value);
-  if (Array.isArray(value))
-    return value.map((item) => sanitizeDeep(item, depth + 1));
-  if (typeof value === "object") {
-    const result = {};
-    for (const [key, val] of Object.entries(value)) {
-      if (SAFE_KEYS.has(key) && typeof val === "string") {
-        result[key] = val;
-      } else {
-        result[key] = sanitizeDeep(val, depth + 1);
-      }
-    }
-    return result;
-  }
-  return value;
-}
-
-// ../node_modules/zod/v4/classic/external.js
+// ../../node_modules/zod/v4/classic/external.js
 var exports_external = {};
 __export(exports_external, {
   xor: () => xor,
@@ -2269,7 +262,7 @@ __export(exports_external, {
   $brand: () => $brand
 });
 
-// ../node_modules/zod/v4/core/index.js
+// ../../node_modules/zod/v4/core/index.js
 var exports_core2 = {};
 __export(exports_core2, {
   version: () => version,
@@ -2547,7 +540,7 @@ __export(exports_core2, {
   $ZodAny: () => $ZodAny
 });
 
-// ../node_modules/zod/v4/core/core.js
+// ../../node_modules/zod/v4/core/core.js
 var NEVER = Object.freeze({
   status: "aborted"
 });
@@ -2623,7 +616,7 @@ function config(newConfig) {
     Object.assign(globalConfig, newConfig);
   return globalConfig;
 }
-// ../node_modules/zod/v4/core/util.js
+// ../../node_modules/zod/v4/core/util.js
 var exports_util = {};
 __export(exports_util, {
   unwrapMessage: () => unwrapMessage,
@@ -3297,7 +1290,7 @@ class Class {
   constructor(..._args) {}
 }
 
-// ../node_modules/zod/v4/core/errors.js
+// ../../node_modules/zod/v4/core/errors.js
 var initializer = (inst, def) => {
   inst.name = "$ZodError";
   Object.defineProperty(inst, "_zod", {
@@ -3434,7 +1427,7 @@ function prettifyError(error) {
 `);
 }
 
-// ../node_modules/zod/v4/core/parse.js
+// ../../node_modules/zod/v4/core/parse.js
 var _parse = (_Err) => (schema, value, _ctx, _params) => {
   const ctx = _ctx ? Object.assign(_ctx, { async: false }) : { async: false };
   const result = schema._zod.run({ value, issues: [] }, ctx);
@@ -3521,7 +1514,7 @@ var _safeDecodeAsync = (_Err) => async (schema, value, _ctx) => {
   return _safeParseAsync(_Err)(schema, value, _ctx);
 };
 var safeDecodeAsync = /* @__PURE__ */ _safeDecodeAsync($ZodRealError);
-// ../node_modules/zod/v4/core/regexes.js
+// ../../node_modules/zod/v4/core/regexes.js
 var exports_regexes = {};
 __export(exports_regexes, {
   xid: () => xid,
@@ -3678,7 +1671,7 @@ var sha512_hex = /^[0-9a-fA-F]{128}$/;
 var sha512_base64 = /* @__PURE__ */ fixedBase64(86, "==");
 var sha512_base64url = /* @__PURE__ */ fixedBase64url(86);
 
-// ../node_modules/zod/v4/core/checks.js
+// ../../node_modules/zod/v4/core/checks.js
 var $ZodCheck = /* @__PURE__ */ $constructor("$ZodCheck", (inst, def) => {
   var _a;
   inst._zod ?? (inst._zod = {});
@@ -4225,7 +2218,7 @@ var $ZodCheckOverwrite = /* @__PURE__ */ $constructor("$ZodCheckOverwrite", (ins
   };
 });
 
-// ../node_modules/zod/v4/core/doc.js
+// ../../node_modules/zod/v4/core/doc.js
 class Doc {
   constructor(args = []) {
     this.content = [];
@@ -4263,14 +2256,14 @@ class Doc {
   }
 }
 
-// ../node_modules/zod/v4/core/versions.js
+// ../../node_modules/zod/v4/core/versions.js
 var version = {
   major: 4,
   minor: 3,
   patch: 5
 };
 
-// ../node_modules/zod/v4/core/schemas.js
+// ../../node_modules/zod/v4/core/schemas.js
 var $ZodType = /* @__PURE__ */ $constructor("$ZodType", (inst, def) => {
   var _a;
   inst ?? (inst = {});
@@ -6232,7 +4225,7 @@ function handleRefineResult(result, payload, input, inst) {
     payload.issues.push(issue(_iss));
   }
 }
-// ../node_modules/zod/v4/locales/index.js
+// ../../node_modules/zod/v4/locales/index.js
 var exports_locales = {};
 __export(exports_locales, {
   zhTW: () => zh_TW_default,
@@ -6286,7 +4279,7 @@ __export(exports_locales, {
   ar: () => ar_default
 });
 
-// ../node_modules/zod/v4/locales/ar.js
+// ../../node_modules/zod/v4/locales/ar.js
 var error = () => {
   const Sizable = {
     string: { unit: "\u062D\u0631\u0641", verb: "\u0623\u0646 \u064A\u062D\u0648\u064A" },
@@ -6392,7 +4385,7 @@ function ar_default() {
     localeError: error()
   };
 }
-// ../node_modules/zod/v4/locales/az.js
+// ../../node_modules/zod/v4/locales/az.js
 var error2 = () => {
   const Sizable = {
     string: { unit: "simvol", verb: "olmal\u0131d\u0131r" },
@@ -6497,7 +4490,7 @@ function az_default() {
     localeError: error2()
   };
 }
-// ../node_modules/zod/v4/locales/be.js
+// ../../node_modules/zod/v4/locales/be.js
 function getBelarusianPlural(count, one, few, many) {
   const absCount = Math.abs(count);
   const lastDigit = absCount % 10;
@@ -6653,7 +4646,7 @@ function be_default() {
     localeError: error3()
   };
 }
-// ../node_modules/zod/v4/locales/bg.js
+// ../../node_modules/zod/v4/locales/bg.js
 var error4 = () => {
   const Sizable = {
     string: { unit: "\u0441\u0438\u043C\u0432\u043E\u043B\u0430", verb: "\u0434\u0430 \u0441\u044A\u0434\u044A\u0440\u0436\u0430" },
@@ -6773,7 +4766,7 @@ function bg_default() {
     localeError: error4()
   };
 }
-// ../node_modules/zod/v4/locales/ca.js
+// ../../node_modules/zod/v4/locales/ca.js
 var error5 = () => {
   const Sizable = {
     string: { unit: "car\xE0cters", verb: "contenir" },
@@ -6880,7 +4873,7 @@ function ca_default() {
     localeError: error5()
   };
 }
-// ../node_modules/zod/v4/locales/cs.js
+// ../../node_modules/zod/v4/locales/cs.js
 var error6 = () => {
   const Sizable = {
     string: { unit: "znak\u016F", verb: "m\xEDt" },
@@ -6991,7 +4984,7 @@ function cs_default() {
     localeError: error6()
   };
 }
-// ../node_modules/zod/v4/locales/da.js
+// ../../node_modules/zod/v4/locales/da.js
 var error7 = () => {
   const Sizable = {
     string: { unit: "tegn", verb: "havde" },
@@ -7106,7 +5099,7 @@ function da_default() {
     localeError: error7()
   };
 }
-// ../node_modules/zod/v4/locales/de.js
+// ../../node_modules/zod/v4/locales/de.js
 var error8 = () => {
   const Sizable = {
     string: { unit: "Zeichen", verb: "zu haben" },
@@ -7214,7 +5207,7 @@ function de_default() {
     localeError: error8()
   };
 }
-// ../node_modules/zod/v4/locales/en.js
+// ../../node_modules/zod/v4/locales/en.js
 var error9 = () => {
   const Sizable = {
     string: { unit: "characters", verb: "to have" },
@@ -7320,7 +5313,7 @@ function en_default() {
     localeError: error9()
   };
 }
-// ../node_modules/zod/v4/locales/eo.js
+// ../../node_modules/zod/v4/locales/eo.js
 var error10 = () => {
   const Sizable = {
     string: { unit: "karaktrojn", verb: "havi" },
@@ -7429,7 +5422,7 @@ function eo_default() {
     localeError: error10()
   };
 }
-// ../node_modules/zod/v4/locales/es.js
+// ../../node_modules/zod/v4/locales/es.js
 var error11 = () => {
   const Sizable = {
     string: { unit: "caracteres", verb: "tener" },
@@ -7561,7 +5554,7 @@ function es_default() {
     localeError: error11()
   };
 }
-// ../node_modules/zod/v4/locales/fa.js
+// ../../node_modules/zod/v4/locales/fa.js
 var error12 = () => {
   const Sizable = {
     string: { unit: "\u06A9\u0627\u0631\u0627\u06A9\u062A\u0631", verb: "\u062F\u0627\u0634\u062A\u0647 \u0628\u0627\u0634\u062F" },
@@ -7675,7 +5668,7 @@ function fa_default() {
     localeError: error12()
   };
 }
-// ../node_modules/zod/v4/locales/fi.js
+// ../../node_modules/zod/v4/locales/fi.js
 var error13 = () => {
   const Sizable = {
     string: { unit: "merkki\xE4", subject: "merkkijonon" },
@@ -7787,7 +5780,7 @@ function fi_default() {
     localeError: error13()
   };
 }
-// ../node_modules/zod/v4/locales/fr.js
+// ../../node_modules/zod/v4/locales/fr.js
 var error14 = () => {
   const Sizable = {
     string: { unit: "caract\xE8res", verb: "avoir" },
@@ -7895,7 +5888,7 @@ function fr_default() {
     localeError: error14()
   };
 }
-// ../node_modules/zod/v4/locales/fr-CA.js
+// ../../node_modules/zod/v4/locales/fr-CA.js
 var error15 = () => {
   const Sizable = {
     string: { unit: "caract\xE8res", verb: "avoir" },
@@ -8002,7 +5995,7 @@ function fr_CA_default() {
     localeError: error15()
   };
 }
-// ../node_modules/zod/v4/locales/he.js
+// ../../node_modules/zod/v4/locales/he.js
 var error16 = () => {
   const TypeNames = {
     string: { label: "\u05DE\u05D7\u05E8\u05D5\u05D6\u05EA", gender: "f" },
@@ -8195,7 +6188,7 @@ function he_default() {
     localeError: error16()
   };
 }
-// ../node_modules/zod/v4/locales/hu.js
+// ../../node_modules/zod/v4/locales/hu.js
 var error17 = () => {
   const Sizable = {
     string: { unit: "karakter", verb: "legyen" },
@@ -8303,7 +6296,7 @@ function hu_default() {
     localeError: error17()
   };
 }
-// ../node_modules/zod/v4/locales/hy.js
+// ../../node_modules/zod/v4/locales/hy.js
 function getArmenianPlural(count, one, many) {
   return Math.abs(count) === 1 ? one : many;
 }
@@ -8450,7 +6443,7 @@ function hy_default() {
     localeError: error18()
   };
 }
-// ../node_modules/zod/v4/locales/id.js
+// ../../node_modules/zod/v4/locales/id.js
 var error19 = () => {
   const Sizable = {
     string: { unit: "karakter", verb: "memiliki" },
@@ -8556,7 +6549,7 @@ function id_default() {
     localeError: error19()
   };
 }
-// ../node_modules/zod/v4/locales/is.js
+// ../../node_modules/zod/v4/locales/is.js
 var error20 = () => {
   const Sizable = {
     string: { unit: "stafi", verb: "a\xF0 hafa" },
@@ -8665,7 +6658,7 @@ function is_default() {
     localeError: error20()
   };
 }
-// ../node_modules/zod/v4/locales/it.js
+// ../../node_modules/zod/v4/locales/it.js
 var error21 = () => {
   const Sizable = {
     string: { unit: "caratteri", verb: "avere" },
@@ -8773,7 +6766,7 @@ function it_default() {
     localeError: error21()
   };
 }
-// ../node_modules/zod/v4/locales/ja.js
+// ../../node_modules/zod/v4/locales/ja.js
 var error22 = () => {
   const Sizable = {
     string: { unit: "\u6587\u5B57", verb: "\u3067\u3042\u308B" },
@@ -8880,7 +6873,7 @@ function ja_default() {
     localeError: error22()
   };
 }
-// ../node_modules/zod/v4/locales/ka.js
+// ../../node_modules/zod/v4/locales/ka.js
 var error23 = () => {
   const Sizable = {
     string: { unit: "\u10E1\u10D8\u10DB\u10D1\u10DD\u10DA\u10DD", verb: "\u10E3\u10DC\u10D3\u10D0 \u10E8\u10D4\u10D8\u10EA\u10D0\u10D5\u10D3\u10D4\u10E1" },
@@ -8992,7 +6985,7 @@ function ka_default() {
     localeError: error23()
   };
 }
-// ../node_modules/zod/v4/locales/km.js
+// ../../node_modules/zod/v4/locales/km.js
 var error24 = () => {
   const Sizable = {
     string: { unit: "\u178F\u17BD\u17A2\u1780\u17D2\u179F\u179A", verb: "\u1782\u17BD\u179A\u1798\u17B6\u1793" },
@@ -9103,11 +7096,11 @@ function km_default() {
   };
 }
 
-// ../node_modules/zod/v4/locales/kh.js
+// ../../node_modules/zod/v4/locales/kh.js
 function kh_default() {
   return km_default();
 }
-// ../node_modules/zod/v4/locales/ko.js
+// ../../node_modules/zod/v4/locales/ko.js
 var error25 = () => {
   const Sizable = {
     string: { unit: "\uBB38\uC790", verb: "to have" },
@@ -9218,7 +7211,7 @@ function ko_default() {
     localeError: error25()
   };
 }
-// ../node_modules/zod/v4/locales/lt.js
+// ../../node_modules/zod/v4/locales/lt.js
 var capitalizeFirstCharacter = (text) => {
   return text.charAt(0).toUpperCase() + text.slice(1);
 };
@@ -9421,7 +7414,7 @@ function lt_default() {
     localeError: error26()
   };
 }
-// ../node_modules/zod/v4/locales/mk.js
+// ../../node_modules/zod/v4/locales/mk.js
 var error27 = () => {
   const Sizable = {
     string: { unit: "\u0437\u043D\u0430\u0446\u0438", verb: "\u0434\u0430 \u0438\u043C\u0430\u0430\u0442" },
@@ -9530,7 +7523,7 @@ function mk_default() {
     localeError: error27()
   };
 }
-// ../node_modules/zod/v4/locales/ms.js
+// ../../node_modules/zod/v4/locales/ms.js
 var error28 = () => {
   const Sizable = {
     string: { unit: "aksara", verb: "mempunyai" },
@@ -9637,7 +7630,7 @@ function ms_default() {
     localeError: error28()
   };
 }
-// ../node_modules/zod/v4/locales/nl.js
+// ../../node_modules/zod/v4/locales/nl.js
 var error29 = () => {
   const Sizable = {
     string: { unit: "tekens", verb: "heeft" },
@@ -9747,7 +7740,7 @@ function nl_default() {
     localeError: error29()
   };
 }
-// ../node_modules/zod/v4/locales/no.js
+// ../../node_modules/zod/v4/locales/no.js
 var error30 = () => {
   const Sizable = {
     string: { unit: "tegn", verb: "\xE5 ha" },
@@ -9855,7 +7848,7 @@ function no_default() {
     localeError: error30()
   };
 }
-// ../node_modules/zod/v4/locales/ota.js
+// ../../node_modules/zod/v4/locales/ota.js
 var error31 = () => {
   const Sizable = {
     string: { unit: "harf", verb: "olmal\u0131d\u0131r" },
@@ -9964,7 +7957,7 @@ function ota_default() {
     localeError: error31()
   };
 }
-// ../node_modules/zod/v4/locales/ps.js
+// ../../node_modules/zod/v4/locales/ps.js
 var error32 = () => {
   const Sizable = {
     string: { unit: "\u062A\u0648\u06A9\u064A", verb: "\u0648\u0644\u0631\u064A" },
@@ -10078,7 +8071,7 @@ function ps_default() {
     localeError: error32()
   };
 }
-// ../node_modules/zod/v4/locales/pl.js
+// ../../node_modules/zod/v4/locales/pl.js
 var error33 = () => {
   const Sizable = {
     string: { unit: "znak\xF3w", verb: "mie\u0107" },
@@ -10187,7 +8180,7 @@ function pl_default() {
     localeError: error33()
   };
 }
-// ../node_modules/zod/v4/locales/pt.js
+// ../../node_modules/zod/v4/locales/pt.js
 var error34 = () => {
   const Sizable = {
     string: { unit: "caracteres", verb: "ter" },
@@ -10295,7 +8288,7 @@ function pt_default() {
     localeError: error34()
   };
 }
-// ../node_modules/zod/v4/locales/ru.js
+// ../../node_modules/zod/v4/locales/ru.js
 function getRussianPlural(count, one, few, many) {
   const absCount = Math.abs(count);
   const lastDigit = absCount % 10;
@@ -10451,7 +8444,7 @@ function ru_default() {
     localeError: error35()
   };
 }
-// ../node_modules/zod/v4/locales/sl.js
+// ../../node_modules/zod/v4/locales/sl.js
 var error36 = () => {
   const Sizable = {
     string: { unit: "znakov", verb: "imeti" },
@@ -10560,7 +8553,7 @@ function sl_default() {
     localeError: error36()
   };
 }
-// ../node_modules/zod/v4/locales/sv.js
+// ../../node_modules/zod/v4/locales/sv.js
 var error37 = () => {
   const Sizable = {
     string: { unit: "tecken", verb: "att ha" },
@@ -10670,7 +8663,7 @@ function sv_default() {
     localeError: error37()
   };
 }
-// ../node_modules/zod/v4/locales/ta.js
+// ../../node_modules/zod/v4/locales/ta.js
 var error38 = () => {
   const Sizable = {
     string: { unit: "\u0B8E\u0BB4\u0BC1\u0BA4\u0BCD\u0BA4\u0BC1\u0B95\u0BCD\u0B95\u0BB3\u0BCD", verb: "\u0B95\u0BCA\u0BA3\u0BCD\u0B9F\u0BBF\u0BB0\u0BC1\u0B95\u0BCD\u0B95 \u0BB5\u0BC7\u0BA3\u0BCD\u0B9F\u0BC1\u0BAE\u0BCD" },
@@ -10780,7 +8773,7 @@ function ta_default() {
     localeError: error38()
   };
 }
-// ../node_modules/zod/v4/locales/th.js
+// ../../node_modules/zod/v4/locales/th.js
 var error39 = () => {
   const Sizable = {
     string: { unit: "\u0E15\u0E31\u0E27\u0E2D\u0E31\u0E01\u0E29\u0E23", verb: "\u0E04\u0E27\u0E23\u0E21\u0E35" },
@@ -10890,7 +8883,7 @@ function th_default() {
     localeError: error39()
   };
 }
-// ../node_modules/zod/v4/locales/tr.js
+// ../../node_modules/zod/v4/locales/tr.js
 var error40 = () => {
   const Sizable = {
     string: { unit: "karakter", verb: "olmal\u0131" },
@@ -10995,7 +8988,7 @@ function tr_default() {
     localeError: error40()
   };
 }
-// ../node_modules/zod/v4/locales/uk.js
+// ../../node_modules/zod/v4/locales/uk.js
 var error41 = () => {
   const Sizable = {
     string: { unit: "\u0441\u0438\u043C\u0432\u043E\u043B\u0456\u0432", verb: "\u043C\u0430\u0442\u0438\u043C\u0435" },
@@ -11104,11 +9097,11 @@ function uk_default() {
   };
 }
 
-// ../node_modules/zod/v4/locales/ua.js
+// ../../node_modules/zod/v4/locales/ua.js
 function ua_default() {
   return uk_default();
 }
-// ../node_modules/zod/v4/locales/ur.js
+// ../../node_modules/zod/v4/locales/ur.js
 var error42 = () => {
   const Sizable = {
     string: { unit: "\u062D\u0631\u0648\u0641", verb: "\u06C1\u0648\u0646\u0627" },
@@ -11218,7 +9211,7 @@ function ur_default() {
     localeError: error42()
   };
 }
-// ../node_modules/zod/v4/locales/uz.js
+// ../../node_modules/zod/v4/locales/uz.js
 var error43 = () => {
   const Sizable = {
     string: { unit: "belgi", verb: "bo\u2018lishi kerak" },
@@ -11327,7 +9320,7 @@ function uz_default() {
     localeError: error43()
   };
 }
-// ../node_modules/zod/v4/locales/vi.js
+// ../../node_modules/zod/v4/locales/vi.js
 var error44 = () => {
   const Sizable = {
     string: { unit: "k\xFD t\u1EF1", verb: "c\xF3" },
@@ -11435,7 +9428,7 @@ function vi_default() {
     localeError: error44()
   };
 }
-// ../node_modules/zod/v4/locales/zh-CN.js
+// ../../node_modules/zod/v4/locales/zh-CN.js
 var error45 = () => {
   const Sizable = {
     string: { unit: "\u5B57\u7B26", verb: "\u5305\u542B" },
@@ -11544,7 +9537,7 @@ function zh_CN_default() {
     localeError: error45()
   };
 }
-// ../node_modules/zod/v4/locales/zh-TW.js
+// ../../node_modules/zod/v4/locales/zh-TW.js
 var error46 = () => {
   const Sizable = {
     string: { unit: "\u5B57\u5143", verb: "\u64C1\u6709" },
@@ -11651,7 +9644,7 @@ function zh_TW_default() {
     localeError: error46()
   };
 }
-// ../node_modules/zod/v4/locales/yo.js
+// ../../node_modules/zod/v4/locales/yo.js
 var error47 = () => {
   const Sizable = {
     string: { unit: "\xE0mi", verb: "n\xED" },
@@ -11758,7 +9751,7 @@ function yo_default() {
     localeError: error47()
   };
 }
-// ../node_modules/zod/v4/core/registries.js
+// ../../node_modules/zod/v4/core/registries.js
 var _a;
 var $output = Symbol("ZodOutput");
 var $input = Symbol("ZodInput");
@@ -11808,7 +9801,7 @@ function registry() {
 }
 (_a = globalThis).__zod_globalRegistry ?? (_a.__zod_globalRegistry = registry());
 var globalRegistry = globalThis.__zod_globalRegistry;
-// ../node_modules/zod/v4/core/api.js
+// ../../node_modules/zod/v4/core/api.js
 function _string(Class2, params) {
   return new Class2({
     type: "string",
@@ -12728,7 +10721,7 @@ function _stringFormat(Class2, format, fnOrRegex, _params = {}) {
   const inst = new Class2(def);
   return inst;
 }
-// ../node_modules/zod/v4/core/to-json-schema.js
+// ../../node_modules/zod/v4/core/to-json-schema.js
 function initializeContext(params) {
   let target = params?.target ?? "draft-2020-12";
   if (target === "draft-4")
@@ -13073,7 +11066,7 @@ var createStandardJSONSchemaMethod = (schema, io, processors = {}) => (params) =
   extractDefs(ctx, schema);
   return finalize(ctx, schema);
 };
-// ../node_modules/zod/v4/core/json-schema-processors.js
+// ../../node_modules/zod/v4/core/json-schema-processors.js
 var formatMap = {
   guid: "uuid",
   url: "uri",
@@ -13618,7 +11611,7 @@ function toJSONSchema(input, params) {
   extractDefs(ctx, input);
   return finalize(ctx, input);
 }
-// ../node_modules/zod/v4/core/json-schema-generator.js
+// ../../node_modules/zod/v4/core/json-schema-generator.js
 class JSONSchemaGenerator {
   get metadataRegistry() {
     return this.ctx.metadataRegistry;
@@ -13677,9 +11670,9 @@ class JSONSchemaGenerator {
     return plainResult;
   }
 }
-// ../node_modules/zod/v4/core/json-schema.js
+// ../../node_modules/zod/v4/core/json-schema.js
 var exports_json_schema = {};
-// ../node_modules/zod/v4/classic/schemas.js
+// ../../node_modules/zod/v4/classic/schemas.js
 var exports_schemas2 = {};
 __export(exports_schemas2, {
   xor: () => xor,
@@ -13848,7 +11841,7 @@ __export(exports_schemas2, {
   ZodAny: () => ZodAny
 });
 
-// ../node_modules/zod/v4/classic/checks.js
+// ../../node_modules/zod/v4/classic/checks.js
 var exports_checks2 = {};
 __export(exports_checks2, {
   uppercase: () => _uppercase,
@@ -13882,7 +11875,7 @@ __export(exports_checks2, {
   endsWith: () => _endsWith
 });
 
-// ../node_modules/zod/v4/classic/iso.js
+// ../../node_modules/zod/v4/classic/iso.js
 var exports_iso = {};
 __export(exports_iso, {
   time: () => time2,
@@ -13923,7 +11916,7 @@ function duration2(params) {
   return _isoDuration(ZodISODuration, params);
 }
 
-// ../node_modules/zod/v4/classic/errors.js
+// ../../node_modules/zod/v4/classic/errors.js
 var initializer2 = (inst, issues) => {
   $ZodError.init(inst, issues);
   inst.name = "ZodError";
@@ -13958,7 +11951,7 @@ var ZodRealError = $constructor("ZodError", initializer2, {
   Parent: Error
 });
 
-// ../node_modules/zod/v4/classic/parse.js
+// ../../node_modules/zod/v4/classic/parse.js
 var parse3 = /* @__PURE__ */ _parse(ZodRealError);
 var parseAsync2 = /* @__PURE__ */ _parseAsync(ZodRealError);
 var safeParse2 = /* @__PURE__ */ _safeParse(ZodRealError);
@@ -13972,7 +11965,7 @@ var safeDecode2 = /* @__PURE__ */ _safeDecode(ZodRealError);
 var safeEncodeAsync2 = /* @__PURE__ */ _safeEncodeAsync(ZodRealError);
 var safeDecodeAsync2 = /* @__PURE__ */ _safeDecodeAsync(ZodRealError);
 
-// ../node_modules/zod/v4/classic/schemas.js
+// ../../node_modules/zod/v4/classic/schemas.js
 var ZodType = /* @__PURE__ */ $constructor("ZodType", (inst, def) => {
   $ZodType.init(inst, def);
   Object.assign(inst["~standard"], {
@@ -15048,7 +13041,7 @@ function json(params) {
 function preprocess(fn, schema) {
   return pipe(transform(fn), schema);
 }
-// ../node_modules/zod/v4/classic/compat.js
+// ../../node_modules/zod/v4/classic/compat.js
 var ZodIssueCode = {
   invalid_type: "invalid_type",
   too_big: "too_big",
@@ -15072,7 +13065,7 @@ function getErrorMap() {
 }
 var ZodFirstPartyTypeKind;
 (function(ZodFirstPartyTypeKind2) {})(ZodFirstPartyTypeKind || (ZodFirstPartyTypeKind = {}));
-// ../node_modules/zod/v4/classic/from-json-schema.js
+// ../../node_modules/zod/v4/classic/from-json-schema.js
 var z = {
   ...exports_schemas2,
   ...exports_checks2,
@@ -15533,7 +13526,7 @@ function fromJSONSchema(schema, params) {
   };
   return convertSchema(schema, ctx);
 }
-// ../node_modules/zod/v4/classic/coerce.js
+// ../../node_modules/zod/v4/classic/coerce.js
 var exports_coerce = {};
 __export(exports_coerce, {
   string: () => string3,
@@ -15558,9 +13551,9 @@ function date4(params) {
   return _coercedDate(ZodDate, params);
 }
 
-// ../node_modules/zod/v4/classic/external.js
+// ../../node_modules/zod/v4/classic/external.js
 config(en_default());
-// cli/lib/schemas.ts
+// ../shared/src/schemas.ts
 var TextBlockSchema = exports_external.looseObject({
   type: exports_external.literal("text"),
   text: exports_external.string()
@@ -15718,842 +13711,7 @@ var HiveMindMetaSchema = exports_external.object({
   excluded: exports_external.boolean().optional(),
   uploadedAt: exports_external.string().optional()
 });
-
-// cli/lib/auth.ts
-import { mkdir as mkdir2 } from "fs/promises";
-var WORKOS_API_URL = "https://api.workos.com/user_management";
-var AuthUserSchema = exports_external.object({
-  id: exports_external.string(),
-  email: exports_external.string(),
-  first_name: exports_external.string().optional(),
-  last_name: exports_external.string().optional()
-});
-var AuthDataSchema = exports_external.object({
-  access_token: exports_external.string(),
-  refresh_token: exports_external.string(),
-  user: AuthUserSchema,
-  authenticated_at: exports_external.number().optional()
-});
-function decodeJwtPayload(token) {
-  try {
-    const parts = token.split(".");
-    if (parts.length !== 3)
-      return null;
-    let payload = parts[1];
-    const padding = 4 - payload.length % 4;
-    if (padding < 4) {
-      payload += "=".repeat(padding);
-    }
-    return JSON.parse(atob(payload));
-  } catch {
-    return null;
-  }
-}
-function isTokenExpired(token) {
-  const payload = decodeJwtPayload(token);
-  if (!payload || typeof payload.exp !== "number")
-    return true;
-  return payload.exp <= Math.floor(Date.now() / 1000);
-}
-function isErrorResult(result) {
-  return result !== null && typeof result === "object" && "error" in result;
-}
-var isAuthError = isErrorResult;
-async function loadAuthData() {
-  try {
-    const file2 = Bun.file(AUTH_FILE);
-    if (!await file2.exists())
-      return null;
-    const data = await file2.json();
-    const parsed = AuthDataSchema.safeParse(data);
-    if (!parsed.success) {
-      return { error: errors.authSchemaError(parsed.error.message) };
-    }
-    return parsed.data;
-  } catch {
-    return null;
-  }
-}
-async function saveAuthData(data) {
-  await mkdir2(AUTH_DIR, { recursive: true });
-  await Bun.write(AUTH_FILE, JSON.stringify(data, null, 2), { mode: 384 });
-}
-async function refreshToken(refreshTokenValue, existingAuthenticatedAt) {
-  try {
-    const response = await fetch(`${WORKOS_API_URL}/authenticate`, {
-      method: "POST",
-      headers: { "Content-Type": "application/x-www-form-urlencoded" },
-      body: new URLSearchParams({
-        grant_type: "refresh_token",
-        refresh_token: refreshTokenValue,
-        client_id: WORKOS_CLIENT_ID
-      })
-    });
-    if (!response.ok) {
-      return { error: errors.refreshFailed(response.status) };
-    }
-    const data = await response.json();
-    const parsed = AuthDataSchema.safeParse(data);
-    if (!parsed.success) {
-      return { error: errors.refreshFailed(response.status) };
-    }
-    return {
-      ...parsed.data,
-      authenticated_at: existingAuthenticatedAt
-    };
-  } catch {
-    return null;
-  }
-}
-function toOptionalErrors(arr) {
-  return arr.length > 0 ? arr : undefined;
-}
-function notAuthenticated(authErrors) {
-  return { authenticated: false, needsLogin: true, errors: authErrors };
-}
-function authenticated(user, authErrors) {
-  return { authenticated: true, user, needsLogin: false, errors: authErrors };
-}
-async function tryRefresh(authData) {
-  const collectedErrors = [];
-  const refreshResult = await refreshToken(authData.refresh_token, authData.authenticated_at);
-  if (isErrorResult(refreshResult)) {
-    collectedErrors.push(refreshResult.error);
-    const freshResult = await loadAuthData();
-    if (isAuthError(freshResult)) {
-      collectedErrors.push(freshResult.error);
-    }
-    const freshData = isAuthError(freshResult) ? null : freshResult;
-    if (freshData?.access_token && !isTokenExpired(freshData.access_token)) {
-      return authenticated(freshData.user, toOptionalErrors(collectedErrors));
-    }
-    return notAuthenticated(collectedErrors);
-  }
-  if (!refreshResult)
-    return notAuthenticated(toOptionalErrors(collectedErrors));
-  await saveAuthData(refreshResult);
-  return authenticated(refreshResult.user, toOptionalErrors(collectedErrors));
-}
-async function checkAuthStatus(attemptRefresh = true) {
-  const collectedErrors = [];
-  const authResult = await loadAuthData();
-  if (isAuthError(authResult)) {
-    collectedErrors.push(authResult.error);
-  }
-  const authData = isAuthError(authResult) ? null : authResult;
-  if (!authData?.access_token) {
-    return notAuthenticated(toOptionalErrors(collectedErrors));
-  }
-  if (!isTokenExpired(authData.access_token)) {
-    return authenticated(authData.user, toOptionalErrors(collectedErrors));
-  }
-  if (!attemptRefresh || !authData.refresh_token) {
-    return notAuthenticated(toOptionalErrors(collectedErrors));
-  }
-  const refreshStatus = await tryRefresh(authData);
-  const allErrors = [...collectedErrors, ...refreshStatus.errors ?? []];
-  return { ...refreshStatus, errors: toOptionalErrors(allErrors) };
-}
-function getUserDisplayName(user) {
-  return user.first_name || user.email;
-}
-
-// cli/lib/extraction.ts
-var HIVE_MIND_VERSION = "0.1";
-function* parseJsonl(content) {
-  for (const line of content.split(`
-`)) {
-    const trimmed = line.trim();
-    if (!trimmed)
-      continue;
-    try {
-      yield JSON.parse(trimmed);
-    } catch (error48) {
-      if (process.env.DEBUG) {
-        console.warn("Skipping malformed JSONL line:", error48);
-      }
-    }
-  }
-}
-function transformEntry(rawEntry) {
-  const result = parseKnownEntry(rawEntry);
-  if (result.error)
-    return { entry: null, error: result.error };
-  if (!result.data)
-    return { entry: null };
-  const type = result.data.type;
-  if (type === "user" || type === "assistant" || type === "summary" || type === "system") {
-    return { entry: result.data };
-  }
-  return { entry: null };
-}
-async function parseSessionForErrors(rawPath) {
-  const content = await readFile2(rawPath, "utf-8");
-  const schemaErrors = [];
-  let hasAssistant = false;
-  for (const rawEntry of parseJsonl(content)) {
-    const { entry, error: error48 } = transformEntry(rawEntry);
-    if (error48)
-      schemaErrors.push(error48);
-    if (entry?.type === "assistant")
-      hasAssistant = true;
-  }
-  return { hasContent: hasAssistant, schemaErrors };
-}
-async function extractSession(options) {
-  const { rawPath, outputPath, agentId } = options;
-  const hiveMindDir = dirname(dirname(outputPath));
-  const [content, rawStat, checkoutId, existingMetaResult] = await Promise.all([
-    readFile2(rawPath, "utf-8"),
-    stat2(rawPath),
-    getOrCreateCheckoutId(hiveMindDir),
-    readExtractedMeta(outputPath)
-  ]);
-  const existingMeta = isMetaError(existingMetaResult) ? null : existingMetaResult;
-  const t0Parse = process.env.DEBUG ? performance.now() : 0;
-  const entries = [];
-  const schemaErrors = [];
-  for (const rawEntry of parseJsonl(content)) {
-    const { entry, error: error48 } = transformEntry(rawEntry);
-    if (error48)
-      schemaErrors.push(error48);
-    if (entry)
-      entries.push(entry);
-  }
-  const rawLineCount = content.split(`
-`).filter((l) => l.trim()).length;
-  if (process.env.DEBUG) {
-    console.log(`[extract] Parsing: ${(performance.now() - t0Parse).toFixed(2)}ms for ${entries.length} entries`);
-  }
-  if (!entries.some((e) => e.type === "assistant"))
-    return null;
-  const parentSessionId = agentId ? entries.find((e) => ("sessionId" in e) && typeof e.sessionId === "string")?.sessionId : undefined;
-  const meta3 = {
-    _type: "hive-mind-meta",
-    version: HIVE_MIND_VERSION,
-    sessionId: basename2(rawPath, ".jsonl"),
-    checkoutId,
-    extractedAt: new Date().toISOString(),
-    rawMtime: rawStat.mtime.toISOString(),
-    messageCount: entries.length,
-    rawLineCount,
-    rawPath,
-    ...agentId && { agentId },
-    ...parentSessionId && { parentSessionId },
-    ...schemaErrors.length > 0 && { schemaErrors },
-    ...existingMeta?.excluded && { excluded: true },
-    ...existingMeta?.uploadedAt && { uploadedAt: existingMeta.uploadedAt }
-  };
-  resetDetectSecretsStats();
-  const t0 = performance.now();
-  const sanitizedEntries = entries.map((e) => sanitizeDeep(e));
-  if (process.env.DEBUG) {
-    const stats = getDetectSecretsStats();
-    console.log(`[extract] Sanitization: ${(performance.now() - t0).toFixed(2)}ms | ` + `${stats.calls} calls, ${stats.keywordHits} keyword hits, ${stats.regexRuns} regex runs`);
-  }
-  await mkdir3(dirname(outputPath), { recursive: true });
-  const lines = [JSON.stringify(meta3), ...sanitizedEntries.map((e) => JSON.stringify(e))];
-  await writeFile2(outputPath, `${lines.join(`
-`)}
-`);
-  return { messageCount: entries.length, schemaErrors };
-}
-async function readFirstLine(filePath) {
-  const stream = createReadStream(filePath, { encoding: "utf-8" });
-  const rl = createInterface({ input: stream, crlfDelay: Infinity });
-  try {
-    for await (const line of rl) {
-      stream.destroy();
-      return line;
-    }
-    return null;
-  } finally {
-    rl.close();
-  }
-}
-async function readExtractedMeta(extractedPath) {
-  try {
-    const firstLine = await readFirstLine(extractedPath);
-    if (!firstLine)
-      return null;
-    const parsed = HiveMindMetaSchema.safeParse(JSON.parse(firstLine));
-    if (!parsed.success) {
-      return { error: errors.schemaError(extractedPath, parsed.error.message) };
-    }
-    return parsed.data;
-  } catch {
-    return null;
-  }
-}
-var isMetaError = isErrorResult;
-async function readExtractedSession(extractedPath) {
-  try {
-    const content = await readFile2(extractedPath, "utf-8");
-    const lines = content.split(`
-`).filter((l) => l.trim());
-    if (lines.length === 0)
-      return null;
-    const metaParsed = HiveMindMetaSchema.safeParse(JSON.parse(lines[0]));
-    if (!metaParsed.success) {
-      return { error: errors.schemaError(extractedPath, metaParsed.error.message) };
-    }
-    const entries = [];
-    for (let i = 1;i < lines.length; i++) {
-      const result = parseKnownEntry(JSON.parse(lines[i]));
-      if (result.data)
-        entries.push(result.data);
-    }
-    return { meta: metaParsed.data, entries };
-  } catch {
-    return null;
-  }
-}
-var isSessionError = isErrorResult;
-async function markSessionUploaded(sessionPath) {
-  try {
-    const content = await readFile2(sessionPath, "utf-8");
-    const newlineIndex = content.indexOf(`
-`);
-    if (newlineIndex === -1)
-      return { success: false };
-    const firstLine = content.slice(0, newlineIndex);
-    const parsed = HiveMindMetaSchema.safeParse(JSON.parse(firstLine));
-    if (!parsed.success) {
-      return { success: false, error: errors.schemaError(sessionPath, parsed.error.message) };
-    }
-    const meta3 = { ...parsed.data, uploadedAt: new Date().toISOString() };
-    const newContent = JSON.stringify(meta3) + content.slice(newlineIndex);
-    await writeFile2(sessionPath, newContent);
-    return { success: true };
-  } catch (err) {
-    return { success: false, error: errors.markUploadedFailed(err instanceof Error ? err.message : String(err)) };
-  }
-}
-function getHiveMindSessionsDir(projectCwd) {
-  return join2(projectCwd, ".claude", "hive-mind", "sessions");
-}
-async function countRawLines(filePath) {
-  const stream = createReadStream(filePath, { encoding: "utf-8" });
-  const rl = createInterface({ input: stream, crlfDelay: Infinity });
-  let count = 0;
-  for await (const line of rl) {
-    if (line.trim())
-      count++;
-  }
-  return count;
-}
-async function findRawSessions(rawDir) {
-  const files = await readdir(rawDir);
-  const sessions = [];
-  for (const f of files) {
-    if (f.endsWith(".jsonl")) {
-      if (f.startsWith("agent-")) {
-        sessions.push({ path: join2(rawDir, f), agentId: f.replace("agent-", "").replace(".jsonl", "") });
-      } else {
-        sessions.push({ path: join2(rawDir, f) });
-      }
-      continue;
-    }
-    const subagentsDir = join2(rawDir, f, "subagents");
-    try {
-      const subagentFiles = await readdir(subagentsDir);
-      for (const sf of subagentFiles) {
-        if (sf.endsWith(".jsonl") && sf.startsWith("agent-")) {
-          sessions.push({
-            path: join2(subagentsDir, sf),
-            agentId: sf.replace("agent-", "").replace(".jsonl", "")
-          });
-        }
-      }
-    } catch {}
-  }
-  return sessions;
-}
-var verbose = () => process.env.HIVE_MIND_VERBOSE === "1";
-async function checkAllSessions(cwd, transcriptsDirs) {
-  const extractedDir = getHiveMindSessionsDir(cwd);
-  const collectedErrors = [];
-  const t0 = performance.now();
-  const [rawSessionArrays, extractedResult] = await Promise.all([
-    Promise.all(transcriptsDirs.map(async (dir) => {
-      try {
-        return await findRawSessions(dir);
-      } catch (err) {
-        collectedErrors.push(errors.readTranscriptsDirFailed(dir, err instanceof Error ? err.message : String(err)));
-        return [];
-      }
-    })),
-    loadExtractedMetadata(extractedDir)
-  ]);
-  const tAfterLoad = performance.now();
-  const { metaMap: extractedMetaMap, errors: metadataErrors } = extractedResult;
-  collectedErrors.push(...metadataErrors);
-  const rawSessionMap = new Map;
-  for (const sessions of rawSessionArrays) {
-    for (const session of sessions) {
-      const sessionId = basename2(session.path, ".jsonl");
-      rawSessionMap.set(sessionId, session);
-    }
-  }
-  const rawSessions = [...rawSessionMap.values()];
-  const sessionsToExtract = [];
-  const schemaErrors = [];
-  let parseCount = 0;
-  await Promise.all(rawSessions.map(async (session) => {
-    const { path: rawPath, agentId } = session;
-    const sessionId = basename2(rawPath, ".jsonl");
-    const existingMeta = extractedMetaMap.get(sessionId);
-    let needsExtract = false;
-    if (!existingMeta) {
-      needsExtract = true;
-    } else {
-      try {
-        const rawStat = await stat2(rawPath);
-        const storedMtime = new Date(existingMeta.rawMtime).getTime();
-        if (rawStat.mtime.getTime() > storedMtime) {
-          if (existingMeta.rawLineCount != null) {
-            const currentLineCount = await countRawLines(rawPath);
-            needsExtract = currentLineCount !== existingMeta.rawLineCount;
-          } else {
-            needsExtract = true;
-          }
-        }
-      } catch (err) {
-        collectedErrors.push(errors.statFailed(rawPath, err instanceof Error ? err.message : String(err)));
-        needsExtract = true;
-      }
-    }
-    if (needsExtract) {
-      parseCount++;
-      try {
-        const parseResult = await parseSessionForErrors(rawPath);
-        if (parseResult.schemaErrors.length > 0) {
-          schemaErrors.push({ sessionId, errors: parseResult.schemaErrors });
-        }
-        if (parseResult.hasContent) {
-          sessionsToExtract.push({ sessionId, rawPath, agentId });
-        }
-      } catch (err) {
-        collectedErrors.push(errors.parseSessionFailed(sessionId, err instanceof Error ? err.message : String(err)));
-        sessionsToExtract.push({ sessionId, rawPath, agentId });
-      }
-    }
-  }));
-  const tEnd = performance.now();
-  if (verbose()) {
-    console.error(`[session-start] checkAllSessions: ${(tEnd - t0).toFixed(0)}ms total | ` + `findRaw+loadMeta: ${(tAfterLoad - t0).toFixed(0)}ms | ` + `statCheck+parse: ${(tEnd - tAfterLoad).toFixed(0)}ms | ` + `raw=${rawSessions.length} extracted=${extractedMetaMap.size} needsParse=${parseCount}`);
-  }
-  const extractedSessions = [...extractedMetaMap.entries()].map(([sessionId, meta3]) => ({
-    sessionId,
-    meta: meta3
-  }));
-  return { sessionsToExtract, schemaErrors, extractedSessions, errors: collectedErrors };
-}
-async function loadExtractedMetadata(extractedDir) {
-  const t0 = performance.now();
-  const metaMap = new Map;
-  const collectedErrors = [];
-  let files;
-  try {
-    files = await readdir(extractedDir);
-  } catch {
-    return { metaMap, errors: collectedErrors };
-  }
-  const jsonlFiles = files.filter((f) => f.endsWith(".jsonl"));
-  const tAfterReaddir = performance.now();
-  await Promise.all(jsonlFiles.map(async (file2) => {
-    const result = await readExtractedMeta(join2(extractedDir, file2));
-    if (isMetaError(result)) {
-      collectedErrors.push(result.error);
-    } else if (result) {
-      metaMap.set(result.sessionId, result);
-    }
-  }));
-  if (verbose()) {
-    console.error(`[session-start]   loadExtractedMetadata: ${(performance.now() - t0).toFixed(0)}ms | ` + `readdir: ${(tAfterReaddir - t0).toFixed(0)}ms | ` + `readMeta: ${(performance.now() - tAfterReaddir).toFixed(0)}ms | ` + `files=${jsonlFiles.length}`);
-  }
-  return { metaMap, errors: collectedErrors };
-}
-async function extractSingleSession(cwd, sessionId) {
-  const extractedDir = getHiveMindSessionsDir(cwd);
-  const transcriptsDirs = await loadTranscriptsDirs(join2(cwd, ".claude", "hive-mind"));
-  if (transcriptsDirs.length === 0)
-    return false;
-  for (const transcriptsDir of transcriptsDirs) {
-    try {
-      const rawSessions = await findRawSessions(transcriptsDir);
-      const session = rawSessions.find((s) => basename2(s.path, ".jsonl") === sessionId);
-      if (session) {
-        const extractedPath = join2(extractedDir, basename2(session.path));
-        const result = await extractSession({
-          rawPath: session.path,
-          outputPath: extractedPath,
-          agentId: session.agentId
-        });
-        return result !== null;
-      }
-    } catch {
-      continue;
-    }
-  }
-  return false;
-}
-
-// cli/lib/output.ts
-var colors = {
-  red: (s) => `\x1B[31m${s}\x1B[0m`,
-  green: (s) => `\x1B[32m${s}\x1B[0m`,
-  yellow: (s) => `\x1B[33m${s}\x1B[0m`,
-  blue: (s) => `\x1B[34m${s}\x1B[0m`
-};
-function hookOutput(message) {
-  console.log(JSON.stringify({ systemMessage: message }));
-}
-function printError(message) {
-  console.error(`${colors.red("Error:")} ${message}`);
-}
-function printSuccess(message) {
-  console.log(colors.green(message));
-}
-function printInfo(message) {
-  console.log(colors.blue(message));
-}
-function printWarning(message) {
-  console.log(colors.yellow(message));
-}
-
-// cli/lib/utils.ts
-import { createInterface as createInterface2 } from "readline";
-import { readdir as readdir2 } from "fs/promises";
-import { join as join3 } from "path";
-function sleep(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-function confirm(message) {
-  const rl = createInterface2({ input: process.stdin, output: process.stdout });
-  return new Promise((resolve) => {
-    rl.question(`${message} [y/N] `, (answer) => {
-      rl.close();
-      resolve(answer.toLowerCase() === "y");
-    });
-  });
-}
-function formatSessionId(id) {
-  return id.length > 12 ? `${id.slice(0, 8)}...${id.slice(-4)}` : id;
-}
-async function lookupSession(cwd, sessionIdPrefix) {
-  const sessionsDir = getHiveMindSessionsDir(cwd);
-  const exactPath = join3(sessionsDir, `${sessionIdPrefix}.jsonl`);
-  const exactMetaResult = await readExtractedMeta(exactPath);
-  if (exactMetaResult && !isMetaError(exactMetaResult)) {
-    return { type: "found", sessionId: sessionIdPrefix, sessionPath: exactPath, meta: exactMetaResult };
-  }
-  let files;
-  try {
-    files = await readdir2(sessionsDir);
-  } catch {
-    return { type: "not_found" };
-  }
-  const matches = files.filter((f) => f.endsWith(".jsonl") && f.startsWith(sessionIdPrefix));
-  if (matches.length === 0) {
-    return { type: "not_found" };
-  }
-  if (matches.length > 1) {
-    return { type: "ambiguous", matches: matches.map((m) => m.replace(".jsonl", "")) };
-  }
-  const sessionId = matches[0].replace(".jsonl", "");
-  const sessionPath = join3(sessionsDir, matches[0]);
-  const metaResult = await readExtractedMeta(sessionPath);
-  if (!metaResult || isMetaError(metaResult)) {
-    return { type: "not_found" };
-  }
-  return { type: "found", sessionId, sessionPath, meta: metaResult };
-}
-
-// cli/commands/exclude.ts
-async function excludeSession(sessionPath) {
-  try {
-    const content = await readFile3(sessionPath, "utf-8");
-    const lines = content.split(`
-`);
-    if (lines.length === 0)
-      return false;
-    const meta3 = JSON.parse(lines[0]);
-    meta3.excluded = true;
-    lines[0] = JSON.stringify(meta3);
-    await writeFile3(sessionPath, lines.join(`
-`));
-    return true;
-  } catch {
-    return false;
-  }
-}
-async function excludeAll(cwd) {
-  const sessionsDir = getHiveMindSessionsDir(cwd);
-  let files;
-  try {
-    files = await readdir3(sessionsDir);
-  } catch {
-    printError(excludeCmd.noSessionsDir);
-    return 1;
-  }
-  const sessionFiles = files.filter((f) => f.endsWith(".jsonl"));
-  if (sessionFiles.length === 0) {
-    console.log(excludeCmd.noSessions);
-    return 0;
-  }
-  let nonExcludedCount = 0;
-  for (const file2 of sessionFiles) {
-    const metaResult = await readExtractedMeta(join4(sessionsDir, file2));
-    if (metaResult && !isMetaError(metaResult) && !metaResult.excluded && !metaResult.agentId) {
-      nonExcludedCount++;
-    }
-  }
-  if (nonExcludedCount === 0) {
-    console.log(excludeCmd.allAlreadyExcluded);
-    return 0;
-  }
-  console.log(excludeCmd.foundNonExcluded(nonExcludedCount));
-  console.log("");
-  if (!await confirm(excludeCmd.confirmExcludeAll)) {
-    console.log(excludeCmd.cancelled);
-    return 0;
-  }
-  let succeeded = 0;
-  let failed = 0;
-  for (const file2 of sessionFiles) {
-    const sessionPath = join4(sessionsDir, file2);
-    const metaResult = await readExtractedMeta(sessionPath);
-    if (!metaResult || isMetaError(metaResult) || metaResult.excluded || metaResult.agentId)
-      continue;
-    const sessionId = file2.replace(".jsonl", "");
-    if (await excludeSession(sessionPath)) {
-      console.log(colors.yellow(excludeCmd.excludedLine(formatSessionId(sessionId))));
-      succeeded++;
-    } else {
-      console.log(colors.red(excludeCmd.failedLine(formatSessionId(sessionId))));
-      failed++;
-    }
-  }
-  console.log("");
-  if (succeeded > 0) {
-    printSuccess(excludeCmd.excludedCount(succeeded));
-  }
-  if (failed > 0) {
-    printError(excludeCmd.failedCount(failed));
-  }
-  return failed > 0 ? 1 : 0;
-}
-async function excludeOne(cwd, sessionIdPrefix) {
-  const lookup = await lookupSession(cwd, sessionIdPrefix);
-  if (lookup.type === "not_found") {
-    printError(excludeCmd.sessionNotFound(sessionIdPrefix));
-    return 1;
-  }
-  if (lookup.type === "ambiguous") {
-    printError(excludeCmd.ambiguousSession(sessionIdPrefix, lookup.matches.length));
-    console.log(excludeCmd.matches);
-    for (const m of lookup.matches) {
-      console.log(`  ${m}`);
-    }
-    return 1;
-  }
-  const { sessionPath, meta: meta3 } = lookup;
-  if (meta3.agentId) {
-    printError(excludeCmd.cannotExcludeAgent);
-    return 1;
-  }
-  if (meta3.excluded) {
-    printInfo(excludeCmd.alreadyExcluded(formatSessionId(meta3.sessionId)));
-    return 0;
-  }
-  if (await excludeSession(sessionPath)) {
-    printSuccess(excludeCmd.excluded(formatSessionId(meta3.sessionId)));
-    return 0;
-  }
-  printError(excludeCmd.failedToExclude(formatSessionId(meta3.sessionId)));
-  return 1;
-}
-async function exclude() {
-  const cwd = process.env.CWD || process.cwd();
-  const args = process.argv.slice(3);
-  if (args.includes("--all")) {
-    return await excludeAll(cwd);
-  }
-  const sessionId = args.find((a) => !a.startsWith("-"));
-  if (!sessionId) {
-    printError(excludeCmd.usage);
-    return 1;
-  }
-  return await excludeOne(cwd, sessionId);
-}
-
-// cli/commands/extract.ts
-async function extract() {
-  const cwd = process.env.CWD || process.cwd();
-  const sessionIds = process.argv.slice(3);
-  if (sessionIds.length === 0) {
-    return 1;
-  }
-  let failures = 0;
-  for (const sessionId of sessionIds) {
-    try {
-      const success2 = await extractSingleSession(cwd, sessionId);
-      if (!success2)
-        failures++;
-    } catch (error48) {
-      if (process.env.DEBUG) {
-        console.error(`[extract] ${error48 instanceof Error ? error48.message : String(error48)}`);
-      }
-      failures++;
-    }
-  }
-  return failures > 0 ? 1 : 0;
-}
-
-// cli/commands/search.ts
-import { readdir as readdir4 } from "fs/promises";
-import { join as join5 } from "path";
-
-// cli/lib/field-filter.ts
-function parseFieldList(input) {
-  return input.split(",").map((s) => s.trim()).filter((s) => s.length > 0);
-}
-function matches(pattern, target) {
-  if (pattern === target)
-    return true;
-  if (target.startsWith(pattern + ":"))
-    return true;
-  if (pattern === "tool:result") {
-    return target.endsWith(":result") && target.startsWith("tool:");
-  }
-  if (pattern === "tool:input") {
-    return target.endsWith(":input") && target.startsWith("tool:");
-  }
-  return false;
-}
-function specificity(field) {
-  return field.split(":").length;
-}
-var READ_DEFAULT_SHOWN = new Set(["user", "assistant", "thinking", "tool", "system", "summary"]);
-var SEARCH_DEFAULT_FIELDS = new Set(["user", "assistant", "thinking", "tool:input", "system", "summary"]);
-
-class ReadFieldFilter {
-  rules;
-  constructor(show, hide) {
-    this.rules = [];
-    for (const field of show) {
-      this.rules.push({ field, action: "show", specificity: specificity(field) });
-    }
-    for (const field of hide) {
-      this.rules.push({ field, action: "hide", specificity: specificity(field) });
-    }
-    this.rules.sort((a, b) => {
-      if (b.specificity !== a.specificity)
-        return b.specificity - a.specificity;
-      if (a.action === "hide" && b.action !== "hide")
-        return -1;
-      if (b.action === "hide" && a.action !== "hide")
-        return 1;
-      return 0;
-    });
-  }
-  shouldShow(field) {
-    for (const rule of this.rules) {
-      if (matches(rule.field, field)) {
-        return rule.action === "show";
-      }
-    }
-    return this.isDefaultShown(field);
-  }
-  showFullThinking() {
-    return this.rules.some((r) => r.field === "thinking" && r.action === "show");
-  }
-  isDefaultShown(field) {
-    for (const def of READ_DEFAULT_SHOWN) {
-      if (matches(def, field))
-        return true;
-    }
-    return false;
-  }
-}
-
-class SearchFieldFilter {
-  searchFields;
-  constructor(searchIn) {
-    if (searchIn === null || searchIn.length === 0) {
-      this.searchFields = new Set(SEARCH_DEFAULT_FIELDS);
-    } else {
-      this.searchFields = new Set(searchIn);
-    }
-  }
-  isSearchable(field) {
-    for (const searchField of this.searchFields) {
-      if (matches(searchField, field) || matches(field, searchField)) {
-        return true;
-      }
-    }
-    return false;
-  }
-}
-
-// cli/lib/truncation.ts
-var MIN_WORD_LIMIT = 6;
-function countWords(text) {
-  if (!text)
-    return 0;
-  return text.split(/\s+/).filter((w) => w.length > 0).length;
-}
-function truncateWords(text, skip, limit) {
-  const wordPattern = /\S+/g;
-  const matches2 = [];
-  let match;
-  while ((match = wordPattern.exec(text)) !== null) {
-    matches2.push({ word: match[0], start: match.index, end: match.index + match[0].length });
-  }
-  const totalWords = matches2.length;
-  if (skip >= totalWords) {
-    return { text: "", wordCount: 0, remaining: 0, truncated: false };
-  }
-  const afterSkipCount = totalWords - skip;
-  const startIdx = skip;
-  const endIdx = Math.min(skip + limit, totalWords);
-  const wordsToInclude = endIdx - startIdx;
-  if (wordsToInclude === 0) {
-    return { text: "", wordCount: 0, remaining: 0, truncated: false };
-  }
-  const startPos = matches2[startIdx].start;
-  const endPos = matches2[endIdx - 1].end;
-  const extracted = text.slice(startPos, endPos);
-  const remaining = afterSkipCount - wordsToInclude;
-  return {
-    text: extracted,
-    wordCount: wordsToInclude,
-    remaining,
-    truncated: remaining > 0
-  };
-}
-function computeUniformLimit(wordCounts, targetTotal) {
-  if (wordCounts.length === 0)
-    return null;
-  const total = wordCounts.reduce((a, b) => a + b, 0);
-  if (total <= targetTotal)
-    return null;
-  const sorted = [...wordCounts].sort((a, b) => a - b);
-  const n = sorted.length;
-  let prefixSum = 0;
-  for (let k = 0;k < n; k++) {
-    const remaining = n - k;
-    const L = (targetTotal - prefixSum) / remaining;
-    if (L <= sorted[k]) {
-      return Math.max(MIN_WORD_LIMIT, Math.floor(L));
-    }
-    prefixSum += sorted[k];
-  }
-  return Math.max(MIN_WORD_LIMIT, Math.floor(targetTotal / n));
-}
-
-// cli/lib/parse.ts
+// ../shared/src/parse.ts
 function isNoiseBlock(block) {
   if (block.type === "tool_result" && "content" in block) {
     const content = block.content;
@@ -16778,8 +13936,2848 @@ function parseSession(meta3, entries) {
     blocks
   };
 }
+// src/lib/config.ts
+import { execSync } from "child_process";
+import { randomUUID } from "crypto";
+import { access, mkdir, readFile, stat, writeFile } from "fs/promises";
+import { homedir } from "os";
+import { basename, join } from "path";
+var WORKOS_CLIENT_ID = process.env.HIVE_MIND_CLIENT_ID ?? "client_01KE10CZ6FFQB9TR2NVBQJ4AKV";
+var AUTH_DIR = join(homedir(), ".claude", "hive-mind");
+function resolveAuthFile() {
+  const envPath = process.env.HIVE_MIND_AUTH_FILE;
+  if (!envPath)
+    return join(AUTH_DIR, "auth.json");
+  return envPath.startsWith("~/") ? join(homedir(), envPath.slice(2)) : envPath;
+}
+var AUTH_FILE = resolveAuthFile();
+async function ensureHiveMindDir(hiveMindDir) {
+  await mkdir(hiveMindDir, { recursive: true });
+  const gitignorePath = join(hiveMindDir, ".gitignore");
+  try {
+    await access(gitignorePath);
+  } catch {
+    await writeFile(gitignorePath, `*
+`);
+  }
+}
+async function getOrCreateCheckoutId(hiveMindDir) {
+  const checkoutIdFile = join(hiveMindDir, "checkout-id");
+  try {
+    const id = await readFile(checkoutIdFile, "utf-8");
+    return id.trim();
+  } catch {
+    const id = randomUUID();
+    await ensureHiveMindDir(hiveMindDir);
+    await writeFile(checkoutIdFile, id);
+    return id;
+  }
+}
+function getShellConfig() {
+  const shell = process.env.SHELL ?? "/bin/bash";
+  if (shell.includes("zsh")) {
+    return { file: "~/.zshrc", sourceCmd: "source ~/.zshrc" };
+  }
+  if (shell.includes("bash")) {
+    return { file: "~/.bashrc", sourceCmd: "source ~/.bashrc" };
+  }
+  if (shell.includes("fish")) {
+    return {
+      file: "~/.config/fish/config.fish",
+      sourceCmd: "source ~/.config/fish/config.fish"
+    };
+  }
+  return { file: "~/.profile", sourceCmd: "source ~/.profile" };
+}
+function getCanonicalProjectName(cwd) {
+  try {
+    const remoteUrl = execSync("git remote get-url origin", {
+      cwd,
+      encoding: "utf-8",
+      stdio: ["pipe", "pipe", "pipe"]
+    }).trim();
+    const canonical = remoteUrl.replace(/^git@/, "").replace(/^https?:\/\//, "").replace(":", "/").replace(/\.git$/, "");
+    return canonical;
+  } catch {
+    return basename(cwd);
+  }
+}
+async function isWorktree(cwd) {
+  try {
+    const gitPath = join(cwd, ".git");
+    const gitStat = await stat(gitPath);
+    return gitStat.isFile();
+  } catch {
+    return false;
+  }
+}
+function getMainWorktreePath(cwd) {
+  try {
+    const output = execSync("git worktree list --porcelain", {
+      cwd,
+      encoding: "utf-8",
+      stdio: ["pipe", "pipe", "pipe"]
+    });
+    const match = output.match(/^worktree (.+)$/m);
+    return match?.[1] ?? null;
+  } catch {
+    return null;
+  }
+}
+function getTranscriptsDirsFile(hiveMindDir) {
+  return join(hiveMindDir, "transcripts-dirs");
+}
+async function loadTranscriptsDirs(hiveMindDir) {
+  try {
+    const content = await readFile(getTranscriptsDirsFile(hiveMindDir), "utf-8");
+    const dirs = content.split(`
+`).map((line) => line.trim()).filter((line) => line.length > 0);
+    const exists = await Promise.all(dirs.map((dir) => access(dir).then(() => true, () => false)));
+    const valid = dirs.filter((_, i) => exists[i]);
+    if (valid.length < dirs.length) {
+      const file2 = getTranscriptsDirsFile(hiveMindDir);
+      await writeFile(file2, valid.join(`
+`) + `
+`, "utf-8").catch(() => {});
+    }
+    return valid;
+  } catch {
+    return [];
+  }
+}
+async function addTranscriptsDir(hiveMindDir, dir) {
+  await ensureHiveMindDir(hiveMindDir);
+  const existing = await loadTranscriptsDirs(hiveMindDir);
+  if (!existing.includes(dir)) {
+    existing.push(dir);
+    await writeFile(getTranscriptsDirsFile(hiveMindDir), existing.join(`
+`) + `
+`, "utf-8");
+  }
+}
 
-// cli/lib/format.ts
+// src/lib/messages.ts
+function getCliCommand(hasAlias) {
+  if (hasAlias) {
+    return "hive-mind";
+  }
+  return `bun ${process.argv[1]}`;
+}
+var hook = {
+  notLoggedIn: () => {
+    return "To connect: run /hive-mind:setup";
+  },
+  loggedIn: (displayName) => {
+    return `Connected as ${displayName}`;
+  },
+  extracted: (count) => {
+    return `Extracted ${count} session${count === 1 ? "" : "s"}`;
+  },
+  schemaErrors: (errorCount, sessionCount, errors3) => {
+    const unique = [...new Set(errors3)];
+    return `Schema issues in ${sessionCount} session${sessionCount === 1 ? "" : "s"} (${errorCount} entries): ${unique.join("; ")}`;
+  },
+  extractionFailed: (error48) => {
+    return `Extraction failed: ${error48}`;
+  },
+  bunNotInstalled: () => {
+    return "To set up hive-mind: run /hive-mind:setup";
+  },
+  pendingSessions: (count, earliestUploadAt) => {
+    if (!earliestUploadAt) {
+      return `${count} session${count === 1 ? "" : "s"} ready to upload`;
+    }
+    const totalMinutes = Math.max(0, Math.ceil((earliestUploadAt - Date.now()) / (1000 * 60)));
+    const hours = Math.floor(totalMinutes / 60);
+    const minutes = totalMinutes % 60;
+    const timeStr = hours > 0 ? `${hours}h ${minutes}m` : `${minutes}m`;
+    if (count === 1) {
+      return `1 session uploads in ${timeStr}`;
+    }
+    return `${count} sessions pending, first uploads in ${timeStr}`;
+  },
+  uploadingSessions: (count, delayMinutes) => {
+    return `Uploading ${count} session${count === 1 ? "" : "s"} in ${delayMinutes}m`;
+  },
+  uploadInProgress: (count) => {
+    return `${count} session${count === 1 ? "" : "s"} eligible (upload in progress)`;
+  },
+  toReview: (userHasAlias) => {
+    const cli = getCliCommand(userHasAlias);
+    return `To review: ${cli} index --pending`;
+  },
+  aliasUpdated: (sourceCmd) => {
+    return `hive-mind alias updated. To activate: ${sourceCmd}`;
+  },
+  extractionsFailed: (count) => {
+    return `Failed to extract ${count} session${count === 1 ? "" : "s"}`;
+  },
+  sessionCheckFailed: () => {
+    return "Failed to check session upload status";
+  },
+  errorsOccurred: (count) => {
+    return `${count} error${count === 1 ? "" : "s"} occurred. Set HIVE_MIND_VERBOSE=1 for details.`;
+  }
+};
+var errors3 = {
+  schemaError: (path, error48) => `Schema error in ${path}: ${error48}`,
+  authSchemaError: (error48) => `Auth data schema error: ${error48}`,
+  refreshFailed: (status) => `Token refresh failed (${status}). Run /hive-mind:setup to re-login.`,
+  readTranscriptsDirFailed: (dir, error48) => `Failed to read transcripts directory ${dir}: ${error48}`,
+  statFailed: (path, error48) => `Failed to stat ${path}: ${error48}`,
+  parseSessionFailed: (sessionId, error48) => `Failed to parse session ${sessionId}: ${error48}`,
+  aliasUpdateFailed: (error48) => `Failed to update alias: ${error48}`,
+  eligibilityCheckFailed: (error48) => `Failed to check session eligibility: ${error48}`,
+  markUploadedFailed: (error48) => `Failed to mark session uploaded: ${error48}`,
+  noSessions: "No sessions found yet. Sessions are extracted automatically when you start Claude Code.",
+  noSessionsIn: (dir) => `No sessions in ${dir}`,
+  sessionNotFound: (prefix) => `No session matching "${prefix}"`,
+  multipleSessions: (prefix) => `Multiple sessions match "${prefix}":`,
+  andMore: (count) => `  ... and ${count} more`,
+  invalidNumber: (flag, value) => `Invalid ${flag} value: "${value}" (expected a positive number)`,
+  invalidNonNegative: (flag) => `Invalid ${flag} value (expected a non-negative number)`,
+  entryNotFound: (requested, max) => `Entry ${requested} not found (session has ${max} entries)`,
+  rangeNotFound: (start, end, max) => `No entries found in range ${start}-${end} (session has ${max} entries)`,
+  invalidEntry: (value) => `Invalid entry number: "${value}"`,
+  invalidRange: (value) => `Invalid range: "${value}"`,
+  emptySession: "Session has no entries",
+  noPattern: "No pattern specified",
+  invalidRegex: (error48) => `Invalid regex: ${error48}`,
+  invalidTimeSpec: (flag, value) => `Invalid ${flag} value: "${value}" (expected relative time like "2h", "7d" or date like "2025-01-10")`,
+  unknownCommand: (cmd) => `Unknown command: ${cmd}`,
+  unexpectedResponse: "Unexpected response from server",
+  bunNotInstalled: "To run hive-mind, install Bun: curl -fsSL https://bun.sh/install | bash",
+  loginStatusYes: (displayName) => `logged in: yes (${displayName})`,
+  loginStatusNo: "logged in: no"
+};
+var usage = {
+  main: (commands) => {
+    const lines = ["Usage: hive-mind <command>", "", "Commands:"];
+    for (const { name, description } of commands) {
+      lines.push(`  ${name.padEnd(15)} ${description}`);
+    }
+    return lines.join(`
+`);
+  },
+  read: () => {
+    return [
+      "Usage: read <session-id> [N | N-M] [options]",
+      "",
+      "Read session entries. Session ID supports prefix matching.",
+      "",
+      "Options:",
+      "  N             Entry number to read (full content)",
+      "  N-M           Entry range to read",
+      "  --target N    Target total words (default 2000)",
+      "  --skip N      Skip first N words per field (for pagination)",
+      "  --show FIELDS Show full content for fields (comma-separated)",
+      "  --hide FIELDS Redact fields to word counts (comma-separated)",
+      "",
+      "Field specifiers:",
+      "  user, assistant, thinking, system, summary",
+      "  tool, tool:<name>, tool:<name>:input, tool:<name>:result",
+      "",
+      "Truncation:",
+      "  Text is adaptively truncated to fit within the target word count.",
+      "  Output shows: '[Limited to N words per field. Use --skip N for more.]'",
+      "  Use --skip with the shown N value to continue reading.",
+      "",
+      "Examples:",
+      "  read 02ed                          # all entries (~2000 words)",
+      "  read 02ed --target 500             # tighter truncation",
+      "  read 02ed --skip 50                # skip first 50 words per field",
+      "  read 02ed 5                        # entry 5 (full content)",
+      "  read 02ed 10-20                    # entries 10 through 20",
+      "  read 02ed --show thinking          # show full thinking content",
+      "  read 02ed --show tool:Bash:result  # show Bash command results",
+      "  read 02ed --hide user              # redact user messages to word counts"
+    ].join(`
+`);
+  },
+  search: () => {
+    return [
+      "Usage: search <pattern> [-i] [-c] [-l] [-m N] [-C N] [-s <session>] [--in <fields>]",
+      "                        [--after <time>] [--before <time>]",
+      "",
+      "Search sessions for a pattern (JavaScript regex).",
+      "Use -- to separate options from pattern if needed.",
+      "",
+      "Options:",
+      "  -i              Case insensitive search",
+      "  -c              Count matches per session only",
+      "  -l              List matching session IDs only",
+      "  -m N            Stop after N total matches",
+      "  -C N            Show N words of context around match (default: 10)",
+      "  -s <session>    Search only in specified session (prefix match)",
+      "  --in <fields>   Search only specified fields (comma-separated)",
+      "  --after <time>  Include only results after this time",
+      "  --before <time> Include only results before this time",
+      "",
+      "Time formats:",
+      "  Relative: 30m (30 min ago), 2h (2 hours), 7d (7 days), 1w (1 week)",
+      "  Absolute: 2025-01-10, 2025-01-10T14:00, 2025-01-10T14:00:00Z",
+      "",
+      "Field specifiers:",
+      "  user, assistant, thinking, system, summary",
+      "  tool:input, tool:result, tool:<name>:input, tool:<name>:result",
+      "",
+      "Default fields: user, assistant, thinking, tool:input, system, summary",
+      "",
+      "Examples:",
+      '  search "TODO"                    # find TODO in sessions',
+      '  search -i "error" -C 20          # case insensitive, 20 words context',
+      '  search -c "function"             # count matches per session',
+      '  search -l "#2597"                # list sessions mentioning issue',
+      '  search -s 02ed "bug"             # search only in session 02ed...',
+      '  search "error|warning|bug"       # find any of these terms (OR)',
+      '  search "TODO|FIXME|XXX"          # find code comments',
+      '  search --in tool:result "error"  # search only in tool results',
+      '  search --in user,assistant "fix" # search only user and assistant',
+      '  search --after 2d "error"        # errors in last 2 days',
+      '  search --after 2025-01-01 "fix"  # fixes since Jan 1'
+    ].join(`
+`);
+  },
+  index: () => {
+    return [
+      "Usage: index",
+      "",
+      "List extracted sessions with statistics and summaries.",
+      "Agent sessions are excluded (explore via Task tool calls in parent sessions).",
+      "Statistics include work from subagent sessions.",
+      "",
+      "Output columns:",
+      "  ID                    Session ID prefix",
+      "  DATETIME              Session modification time",
+      "  MSGS                  Total message count",
+      "  USER_MESSAGES         User message count",
+      "  BASH_CALLS            Bash commands executed",
+      "  WEB_FETCHES           Web fetches",
+      "  WEB_SEARCHES          Web searches",
+      "  LINES_ADDED           Lines added",
+      "  LINES_REMOVED         Lines removed",
+      "  FILES_TOUCHED         Files modified",
+      "  SIGNIFICANT_LOCATIONS Paths where >30% of work happened",
+      "  SUMMARY               Session summary or first prompt",
+      "  COMMITS               Git commits from the session"
+    ].join(`
+`);
+  },
+  indexFull: () => {
+    return [
+      "Usage: index [--escape-file-refs] [--pending]",
+      "",
+      "List all extracted sessions with statistics, summary, and commits.",
+      "Agent sessions are excluded (explore via Task tool calls in parent sessions).",
+      "Statistics include work from subagent sessions.",
+      "",
+      "Options:",
+      "  --escape-file-refs  Escape @ symbols to prevent file reference interpretation",
+      "  --pending           Show upload eligibility status for each session",
+      "",
+      "Output columns:",
+      "  ID                   Session ID prefix (first 16 chars)",
+      "  DATETIME             Session modification time",
+      "  MSGS                 Total message count",
+      "  USER_MESSAGES        User message count",
+      "  BASH_CALLS           Bash commands executed",
+      "  WEB_FETCHES          Web fetches",
+      "  WEB_SEARCHES         Web searches",
+      "  LINES_ADDED          Lines added",
+      "  LINES_REMOVED        Lines removed",
+      "  FILES_TOUCHED        Number of unique files modified",
+      "  SIGNIFICANT_LOCATIONS Paths where >30% of work happened",
+      "  SUMMARY              Session summary or first user prompt",
+      "  COMMITS              Git commit hashes from the session"
+    ].join(`
+`);
+  },
+  upload: () => {
+    return [
+      "Usage: upload <session-id>... [--delay N]",
+      "",
+      "Upload one or more sessions to the shared knowledge base.",
+      "Use `index --pending` to see upload eligibility status."
+    ].join(`
+`);
+  }
+};
+var setup = {
+  header: "Join the hive-mind shared knowledge base",
+  alreadyLoggedIn: "You're already connected.",
+  confirmRelogin: "Do you want to reconnect?",
+  refreshing: "Refreshing your session...",
+  refreshSuccess: "Session refreshed!",
+  starting: "Starting authentication...",
+  deviceAuth: (url2, code) => {
+    return ["Open this URL in your browser:", "", `  ${url2}`, "", "Confirm this code matches:", "", `  ${code}`].join(`
+`);
+  },
+  browserOpened: "Browser opened. Confirm the code and approve.",
+  openManually: "Open the URL manually, then confirm the code.",
+  waiting: (seconds) => `Waiting for authentication... (expires in ${seconds}s)`,
+  waitingProgress: (elapsed) => `Waiting... (${elapsed}s elapsed)`,
+  success: "You're connected!",
+  welcome: (name, email3) => name ? `Welcome, ${name} (${email3})!` : `Logged in as: ${email3}`,
+  consentInfo: (userHasAlias) => {
+    const cli = getCliCommand(userHasAlias);
+    return `Your sessions will contribute to the shared knowledge base.
+You'll have 24 hours to review sessions before auto-submission.
+Run \`${cli} exclude\` anytime to opt out.`;
+  },
+  consentConfirm: "Continue?",
+  consentDeclined: "Setup cancelled. Run setup again if you change your mind.",
+  timeout: "Authentication timed out. Please try again.",
+  startFailed: (error48) => `Couldn't start authentication: ${error48}`,
+  authFailed: (error48) => `Authentication failed: ${error48}`,
+  unexpectedAuthResponse: "Unexpected response from authentication server",
+  aliasPrompt: "Set up a command to run hive-mind more easily?",
+  aliasExplain: "This adds `alias hive-mind=...` to your shell config.",
+  aliasConfirm: "Set up hive-mind command?",
+  aliasSuccess: "Command added!",
+  aliasActivate: (sourceCmd) => `Run \`${sourceCmd}\` or restart your terminal to activate.`,
+  aliasFailed: "Couldn't add command automatically.",
+  alreadySetUp: "hive-mind command already set up"
+};
+var indexCmd = {
+  noSessionsDir: "No sessions found. Run 'extract' first.",
+  noSessionsIn: (dir) => `No sessions found in ${dir}`,
+  uploadStatus: "Upload eligibility status:",
+  noExtractedSessions: "No extracted sessions found.",
+  total: (count, summary) => `Total: ${count} sessions (${summary})`,
+  runUpload: "Run 'hive-mind upload' to upload ready sessions.",
+  excludeSession: "To exclude a session: hive-mind exclude <session-id>",
+  excludeAll: "To exclude all sessions: hive-mind exclude --all"
+};
+var excludeCmd = {
+  noSessionsDir: "No sessions directory found",
+  noSessions: "No sessions found.",
+  allAlreadyExcluded: "All sessions are already excluded.",
+  foundNonExcluded: (count) => `Found ${count} session(s) not yet excluded.`,
+  confirmExcludeAll: "Exclude all sessions from upload?",
+  cancelled: "Cancelled.",
+  excludedCount: (count) => `Excluded ${count} session(s)`,
+  failedCount: (count) => `Failed to exclude ${count} session(s)`,
+  sessionNotFound: (id) => `Session '${id}' not found`,
+  ambiguousSession: (id, count) => `Ambiguous session ID '${id}' matches ${count} sessions`,
+  matches: "Matches:",
+  couldNotRead: (id) => `Could not read session '${id}'`,
+  alreadyExcluded: (id) => `Session ${id} is already excluded`,
+  excluded: (id) => `Excluded session ${id}`,
+  failedToExclude: (id) => `Failed to exclude session ${id}`,
+  cannotExcludeAgent: "Agent sessions cannot be excluded directly. Exclude the parent session instead.",
+  usage: "Usage: hive-mind exclude <session-id> or hive-mind exclude --all",
+  excludedLine: (id) => `  \u2717 ${id} excluded`,
+  failedLine: (id) => `  ! ${id} failed`
+};
+var uploadCmd = {
+  notAuthenticated: "Not authenticated. Run 'hive-mind setup' first.",
+  waitingDelay: (seconds) => `Waiting ${seconds} seconds before upload...`,
+  sessionNotFound: (id) => `Session '${id}' not found`,
+  ambiguousSession: (id, count) => `Multiple sessions match '${id}' (${count} matches):`,
+  sessionExcluded: (id) => `Session ${id} was excluded, skipping`,
+  uploading: (id) => `Uploading ${id}...`,
+  uploaded: (id) => `Uploaded ${id}`,
+  uploadedWithAgents: (id, agentCount) => `Uploaded ${id} (+${agentCount} agent${agentCount === 1 ? "" : "s"})`,
+  failedToUpload: (id, error48) => `Failed to upload ${id}: ${error48}`,
+  checking: "Checking for sessions ready to upload...",
+  noExtractedSessions: "No extracted sessions found.",
+  sessionsHeader: "Sessions:",
+  noSessionsReady: "No sessions ready for upload.",
+  pendingCount: (count) => `${count} session(s) still in review period.`,
+  readyCount: (count) => `${count} session(s) ready for upload.`,
+  confirmUpload: "Upload these sessions?",
+  cancelled: "Cancelled.",
+  uploadedCount: (count) => `Uploaded ${count} session(s)`,
+  failedCount: (count) => `Failed to upload ${count} session(s)`,
+  done: "done",
+  failed: (error48) => `failed: ${error48}`
+};
+
+// src/lib/secret-rules.ts
+var SECRET_RULES = [
+  {
+    id: "1password-secret-key",
+    regex: new RegExp(`\\bA3-[A-Z0-9]{6}-(?:(?:[A-Z0-9]{11})|(?:[A-Z0-9]{6}-[A-Z0-9]{5}))-[A-Z0-9]{5}-[A-Z0-9]{5}-[A-Z0-9]{5}\\b`, "gi"),
+    entropy: 3.8,
+    keywords: ["a3-"]
+  },
+  {
+    id: "1password-service-account-token",
+    regex: new RegExp(`ops_eyJ[a-zA-Z0-9+/]{250,}={0,3}`, "gi"),
+    entropy: 4,
+    keywords: ["ops_"]
+  },
+  {
+    id: "adafruit-api-key",
+    regex: new RegExp(`[\\w.-]{0,50}?(?:adafruit)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}([a-z0-9_-]{32})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
+    keywords: ["adafruit"]
+  },
+  {
+    id: "adobe-client-id",
+    regex: new RegExp(`[\\w.-]{0,50}?(?:adobe)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}([a-f0-9]{32})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
+    entropy: 2,
+    keywords: ["adobe"]
+  },
+  {
+    id: "adobe-client-secret",
+    regex: new RegExp(`\\b(p8e-[a-z0-9]{32})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
+    entropy: 2,
+    keywords: ["p8e-"]
+  },
+  {
+    id: "age-secret-key",
+    regex: new RegExp(`AGE-SECRET-KEY-1[QPZRY9X8GF2TVDW0S3JN54KHCE6MUA7L]{58}`, "gi"),
+    keywords: ["age-secret-key-1"]
+  },
+  {
+    id: "airtable-api-key",
+    regex: new RegExp(`[\\w.-]{0,50}?(?:airtable)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}([a-z0-9]{17})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
+    keywords: ["airtable"]
+  },
+  {
+    id: "airtable-personnal-access-token",
+    regex: new RegExp(`\\b(pat[a-zA-Z0-9]{14}\\.[a-f0-9]{64})\\b`, "gi"),
+    keywords: ["airtable"]
+  },
+  {
+    id: "algolia-api-key",
+    regex: new RegExp(`[\\w.-]{0,50}?(?:algolia)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}([a-z0-9]{32})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
+    keywords: ["algolia"]
+  },
+  {
+    id: "alibaba-access-key-id",
+    regex: new RegExp(`\\b(LTAI[a-z0-9]{20})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
+    entropy: 2,
+    keywords: ["ltai"]
+  },
+  {
+    id: "alibaba-secret-key",
+    regex: new RegExp(`[\\w.-]{0,50}?(?:alibaba)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}([a-z0-9]{30})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
+    entropy: 2,
+    keywords: ["alibaba"]
+  },
+  {
+    id: "anthropic-admin-api-key",
+    regex: new RegExp(`\\b(sk-ant-admin01-[a-zA-Z0-9_\\-]{93}AA)(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
+    keywords: ["sk-ant-admin01"]
+  },
+  {
+    id: "anthropic-api-key",
+    regex: new RegExp(`\\b(sk-ant-api03-[a-zA-Z0-9_\\-]{93}AA)(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
+    keywords: ["sk-ant-api03"]
+  },
+  { id: "artifactory-api-key", regex: new RegExp(`\\bAKCp[A-Za-z0-9]{69}\\b`, "gi"), entropy: 4.5, keywords: ["akcp"] },
+  {
+    id: "artifactory-reference-token",
+    regex: new RegExp(`\\bcmVmd[A-Za-z0-9]{59}\\b`, "gi"),
+    entropy: 4.5,
+    keywords: ["cmvmd"]
+  },
+  {
+    id: "asana-client-id",
+    regex: new RegExp(`[\\w.-]{0,50}?(?:asana)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}([0-9]{16})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
+    keywords: ["asana"]
+  },
+  {
+    id: "asana-client-secret",
+    regex: new RegExp(`[\\w.-]{0,50}?(?:asana)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}([a-z0-9]{32})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
+    keywords: ["asana"]
+  },
+  {
+    id: "atlassian-api-token",
+    regex: new RegExp(`[\\w.-]{0,50}?(?:(?:ATLASSIAN|[Aa]tlassian)|(?:CONFLUENCE|[Cc]onfluence)|(?:JIRA|[Jj]ira))(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}([a-z0-9]{20}[a-f0-9]{4})(?:[\\x60'"\\s;]|\\\\[nr]|$)|\\b(ATATT3[A-Za-z0-9_\\-=]{186})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
+    entropy: 3.5,
+    keywords: ["atlassian", "confluence", "jira", "atatt3"]
+  },
+  {
+    id: "authress-service-client-access-key",
+    regex: new RegExp(`\\b((?:sc|ext|scauth|authress)_[a-z0-9]{5,30}\\.[a-z0-9]{4,6}\\.(?:acc)[_-][a-z0-9-]{10,32}\\.[a-z0-9+/_=-]{30,120})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
+    entropy: 2,
+    keywords: ["sc_", "ext_", "scauth_", "authress_"]
+  },
+  {
+    id: "aws-access-token",
+    regex: new RegExp(`\\b((?:A3T[A-Z0-9]|AKIA|ASIA|ABIA|ACCA)[A-Z2-7]{16})\\b`, "gi"),
+    entropy: 3,
+    keywords: ["a3t", "akia", "asia", "abia", "acca"]
+  },
+  {
+    id: "aws-amazon-bedrock-api-key-long-lived",
+    regex: new RegExp(`\\b(ABSK[A-Za-z0-9+/]{109,269}={0,2})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
+    entropy: 3,
+    keywords: ["absk"]
+  },
+  {
+    id: "aws-amazon-bedrock-api-key-short-lived",
+    regex: new RegExp(`bedrock-api-key-YmVkcm9jay5hbWF6b25hd3MuY29t`, "gi"),
+    entropy: 3,
+    keywords: ["bedrock-api-key-"]
+  },
+  {
+    id: "azure-ad-client-secret",
+    regex: new RegExp(`(?:^|[\\\\'"\\x60\\s>=:(,)])([a-zA-Z0-9_~.]{3}\\dQ~[a-zA-Z0-9_~.-]{31,34})(?:$|[\\\\'"\\x60\\s<),])`, "gi"),
+    entropy: 3,
+    keywords: ["q~"]
+  },
+  {
+    id: "beamer-api-token",
+    regex: new RegExp(`[\\w.-]{0,50}?(?:beamer)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}(b_[a-z0-9=_\\-]{44})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
+    keywords: ["beamer"]
+  },
+  {
+    id: "bitbucket-client-id",
+    regex: new RegExp(`[\\w.-]{0,50}?(?:bitbucket)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}([a-z0-9]{32})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
+    keywords: ["bitbucket"]
+  },
+  {
+    id: "bitbucket-client-secret",
+    regex: new RegExp(`[\\w.-]{0,50}?(?:bitbucket)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}([a-z0-9=_\\-]{64})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
+    keywords: ["bitbucket"]
+  },
+  {
+    id: "bittrex-access-key",
+    regex: new RegExp(`[\\w.-]{0,50}?(?:bittrex)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}([a-z0-9]{32})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
+    keywords: ["bittrex"]
+  },
+  {
+    id: "bittrex-secret-key",
+    regex: new RegExp(`[\\w.-]{0,50}?(?:bittrex)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}([a-z0-9]{32})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
+    keywords: ["bittrex"]
+  },
+  {
+    id: "cisco-meraki-api-key",
+    regex: new RegExp(`[\\w.-]{0,50}?(?:[\\w.-]{0,50}?(?:(?:[Mm]eraki|MERAKI))(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3})(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}([0-9a-f]{40})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
+    entropy: 3,
+    keywords: ["meraki"]
+  },
+  {
+    id: "clickhouse-cloud-api-secret-key",
+    regex: new RegExp(`\\b(4b1d[A-Za-z0-9]{38})\\b`, "gi"),
+    entropy: 3,
+    keywords: ["4b1d"]
+  },
+  { id: "clojars-api-token", regex: new RegExp(`CLOJARS_[a-z0-9]{60}`, "gi"), entropy: 2, keywords: ["clojars_"] },
+  {
+    id: "cloudflare-api-key",
+    regex: new RegExp(`[\\w.-]{0,50}?(?:cloudflare)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}([a-z0-9_-]{40})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
+    entropy: 2,
+    keywords: ["cloudflare"]
+  },
+  {
+    id: "cloudflare-global-api-key",
+    regex: new RegExp(`[\\w.-]{0,50}?(?:cloudflare)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}([a-f0-9]{37})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
+    entropy: 2,
+    keywords: ["cloudflare"]
+  },
+  {
+    id: "cloudflare-origin-ca-key",
+    regex: new RegExp(`\\b(v1\\.0-[a-f0-9]{24}-[a-f0-9]{146})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
+    entropy: 2,
+    keywords: ["cloudflare", "v1.0-"]
+  },
+  {
+    id: "codecov-access-token",
+    regex: new RegExp(`[\\w.-]{0,50}?(?:codecov)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}([a-z0-9]{32})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
+    keywords: ["codecov"]
+  },
+  {
+    id: "cohere-api-token",
+    regex: new RegExp(`[\\w.-]{0,50}?(?:[\\w.-]{0,50}?(?:cohere|CO_API_KEY)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3})(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}([a-zA-Z0-9]{40})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
+    entropy: 4,
+    keywords: ["cohere", "co_api_key"]
+  },
+  {
+    id: "coinbase-access-token",
+    regex: new RegExp(`[\\w.-]{0,50}?(?:coinbase)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}([a-z0-9_-]{64})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
+    keywords: ["coinbase"]
+  },
+  {
+    id: "confluent-access-token",
+    regex: new RegExp(`[\\w.-]{0,50}?(?:confluent)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}([a-z0-9]{16})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
+    keywords: ["confluent"]
+  },
+  {
+    id: "confluent-secret-key",
+    regex: new RegExp(`[\\w.-]{0,50}?(?:confluent)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}([a-z0-9]{64})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
+    keywords: ["confluent"]
+  },
+  {
+    id: "contentful-delivery-api-token",
+    regex: new RegExp(`[\\w.-]{0,50}?(?:contentful)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}([a-z0-9=_\\-]{43})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
+    keywords: ["contentful"]
+  },
+  {
+    id: "curl-auth-header",
+    regex: new RegExp(`\\bcurl\\b(?:.*?|.*?(?:[\\r\\n]{1,2}.*?){1,5})[ \\t\\n\\r](?:-H|--header)(?:=|[ \\t]{0,5})(?:"(?:Authorization:[ \\t]{0,5}(?:Basic[ \\t]([a-z0-9+/]{8,}={0,3})|(?:Bearer|(?:Api-)?Token)[ \\t]([\\w=~@.+/-]{8,})|([\\w=~@.+/-]{8,}))|(?:(?:X-(?:[a-z]+-)?)?(?:Api-?)?(?:Key|Token)):[ \\t]{0,5}([\\w=~@.+/-]{8,}))"|'(?:Authorization:[ \\t]{0,5}(?:Basic[ \\t]([a-z0-9+/]{8,}={0,3})|(?:Bearer|(?:Api-)?Token)[ \\t]([\\w=~@.+/-]{8,})|([\\w=~@.+/-]{8,}))|(?:(?:X-(?:[a-z]+-)?)?(?:Api-?)?(?:Key|Token)):[ \\t]{0,5}([\\w=~@.+/-]{8,}))')(?:\\B|\\s|$)`, "gi"),
+    entropy: 2.75,
+    keywords: ["curl"]
+  },
+  {
+    id: "curl-auth-user",
+    regex: new RegExp(`\\bcurl\\b(?:.*|.*(?:[\\r\\n]{1,2}.*){1,5})[ \\t\\n\\r](?:-u|--user)(?:=|[ \\t]{0,5})("(:[^"]{3,}|[^:"]{3,}:|[^:"]{3,}:[^"]{3,})"|'([^:']{3,}:[^']{3,})'|((?:"[^"]{3,}"|'[^']{3,}'|[\\w$@.-]+):(?:"[^"]{3,}"|'[^']{3,}'|[\\w\${}@.-]+)))(?:\\s|$)`, "gi"),
+    entropy: 2,
+    keywords: ["curl"]
+  },
+  {
+    id: "databricks-api-token",
+    regex: new RegExp(`\\b(dapi[a-f0-9]{32}(?:-\\d)?)(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
+    entropy: 3,
+    keywords: ["dapi"]
+  },
+  {
+    id: "datadog-access-token",
+    regex: new RegExp(`[\\w.-]{0,50}?(?:datadog)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}([a-z0-9]{40})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
+    keywords: ["datadog"]
+  },
+  {
+    id: "defined-networking-api-token",
+    regex: new RegExp(`[\\w.-]{0,50}?(?:dnkey)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}(dnkey-[a-z0-9=_\\-]{26}-[a-z0-9=_\\-]{52})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
+    keywords: ["dnkey"]
+  },
+  {
+    id: "digitalocean-access-token",
+    regex: new RegExp(`\\b(doo_v1_[a-f0-9]{64})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
+    entropy: 3,
+    keywords: ["doo_v1_"]
+  },
+  {
+    id: "digitalocean-pat",
+    regex: new RegExp(`\\b(dop_v1_[a-f0-9]{64})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
+    entropy: 3,
+    keywords: ["dop_v1_"]
+  },
+  {
+    id: "digitalocean-refresh-token",
+    regex: new RegExp(`\\b(dor_v1_[a-f0-9]{64})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
+    keywords: ["dor_v1_"]
+  },
+  {
+    id: "discord-api-token",
+    regex: new RegExp(`[\\w.-]{0,50}?(?:discord)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}([a-f0-9]{64})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
+    keywords: ["discord"]
+  },
+  {
+    id: "discord-client-id",
+    regex: new RegExp(`[\\w.-]{0,50}?(?:discord)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}([0-9]{18})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
+    entropy: 2,
+    keywords: ["discord"]
+  },
+  {
+    id: "discord-client-secret",
+    regex: new RegExp(`[\\w.-]{0,50}?(?:discord)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}([a-z0-9=_\\-]{32})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
+    entropy: 2,
+    keywords: ["discord"]
+  },
+  { id: "doppler-api-token", regex: new RegExp(`dp\\.pt\\.[a-z0-9]{43}`, "gi"), entropy: 2, keywords: ["dp.pt."] },
+  {
+    id: "droneci-access-token",
+    regex: new RegExp(`[\\w.-]{0,50}?(?:droneci)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}([a-z0-9]{32})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
+    keywords: ["droneci"]
+  },
+  {
+    id: "dropbox-api-token",
+    regex: new RegExp(`[\\w.-]{0,50}?(?:dropbox)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}([a-z0-9]{15})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
+    keywords: ["dropbox"]
+  },
+  {
+    id: "dropbox-long-lived-api-token",
+    regex: new RegExp(`[\\w.-]{0,50}?(?:dropbox)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}([a-z0-9]{11}(AAAAAAAAAA)[a-z0-9\\-_=]{43})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
+    keywords: ["dropbox"]
+  },
+  {
+    id: "dropbox-short-lived-api-token",
+    regex: new RegExp(`[\\w.-]{0,50}?(?:dropbox)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}(sl\\.[a-z0-9\\-=_]{135})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
+    keywords: ["dropbox"]
+  },
+  {
+    id: "duffel-api-token",
+    regex: new RegExp(`duffel_(?:test|live)_[a-z0-9_\\-=]{43}`, "gi"),
+    entropy: 2,
+    keywords: ["duffel_"]
+  },
+  {
+    id: "dynatrace-api-token",
+    regex: new RegExp(`dt0c01\\.[a-z0-9]{24}\\.[a-z0-9]{64}`, "gi"),
+    entropy: 4,
+    keywords: ["dt0c01."]
+  },
+  { id: "easypost-api-token", regex: new RegExp(`\\bEZAK[a-z0-9]{54}\\b`, "gi"), entropy: 2, keywords: ["ezak"] },
+  { id: "easypost-test-api-token", regex: new RegExp(`\\bEZTK[a-z0-9]{54}\\b`, "gi"), entropy: 2, keywords: ["eztk"] },
+  {
+    id: "etsy-access-token",
+    regex: new RegExp(`[\\w.-]{0,50}?(?:(?:ETSY|[Ee]tsy))(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}([a-z0-9]{24})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
+    entropy: 3,
+    keywords: ["etsy"]
+  },
+  {
+    id: "facebook-access-token",
+    regex: new RegExp(`\\b(\\d{15,16}(\\||%)[0-9a-z\\-_]{27,40})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
+    entropy: 3,
+    keywords: ["facebook"]
+  },
+  {
+    id: "facebook-page-access-token",
+    regex: new RegExp(`\\b(EAA[MC][a-z0-9]{100,})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
+    entropy: 4,
+    keywords: ["eaam", "eaac"]
+  },
+  {
+    id: "facebook-secret",
+    regex: new RegExp(`[\\w.-]{0,50}?(?:facebook)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}([a-f0-9]{32})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
+    entropy: 3,
+    keywords: ["facebook"]
+  },
+  {
+    id: "fastly-api-token",
+    regex: new RegExp(`[\\w.-]{0,50}?(?:fastly)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}([a-z0-9=_\\-]{32})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
+    keywords: ["fastly"]
+  },
+  {
+    id: "finicity-api-token",
+    regex: new RegExp(`[\\w.-]{0,50}?(?:finicity)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}([a-f0-9]{32})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
+    keywords: ["finicity"]
+  },
+  {
+    id: "finicity-client-secret",
+    regex: new RegExp(`[\\w.-]{0,50}?(?:finicity)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}([a-z0-9]{20})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
+    keywords: ["finicity"]
+  },
+  {
+    id: "finnhub-access-token",
+    regex: new RegExp(`[\\w.-]{0,50}?(?:finnhub)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}([a-z0-9]{20})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
+    keywords: ["finnhub"]
+  },
+  {
+    id: "flickr-access-token",
+    regex: new RegExp(`[\\w.-]{0,50}?(?:flickr)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}([a-z0-9]{32})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
+    keywords: ["flickr"]
+  },
+  {
+    id: "flutterwave-encryption-key",
+    regex: new RegExp(`FLWSECK_TEST-[a-h0-9]{12}`, "gi"),
+    entropy: 2,
+    keywords: ["flwseck_test"]
+  },
+  {
+    id: "flutterwave-public-key",
+    regex: new RegExp(`FLWPUBK_TEST-[a-h0-9]{32}-X`, "gi"),
+    entropy: 2,
+    keywords: ["flwpubk_test"]
+  },
+  {
+    id: "flutterwave-secret-key",
+    regex: new RegExp(`FLWSECK_TEST-[a-h0-9]{32}-X`, "gi"),
+    entropy: 2,
+    keywords: ["flwseck_test"]
+  },
+  {
+    id: "flyio-access-token",
+    regex: new RegExp(`\\b((?:fo1_[\\w-]{43}|fm1[ar]_[a-zA-Z0-9+\\/]{100,}={0,3}|fm2_[a-zA-Z0-9+\\/]{100,}={0,3}))(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
+    entropy: 4,
+    keywords: ["fo1_", "fm1", "fm2_"]
+  },
+  { id: "frameio-api-token", regex: new RegExp(`fio-u-[a-z0-9\\-_=]{64}`, "gi"), keywords: ["fio-u-"] },
+  {
+    id: "freemius-secret-key",
+    regex: new RegExp(`["']secret_key["']\\s*=>\\s*["'](sk_[\\S]{29})["']`, "gi"),
+    keywords: ["secret_key"]
+  },
+  {
+    id: "freshbooks-access-token",
+    regex: new RegExp(`[\\w.-]{0,50}?(?:freshbooks)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}([a-z0-9]{64})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
+    keywords: ["freshbooks"]
+  },
+  {
+    id: "gcp-api-key",
+    regex: new RegExp(`\\b(AIza[\\w-]{35})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
+    entropy: 4,
+    keywords: ["aiza"]
+  },
+  {
+    id: "generic-api-key",
+    regex: new RegExp(`[\\w.-]{0,50}?(?:access|auth|(?:[Aa]pi|API)|credential|creds|key|passw(?:or)?d|secret|token)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}([\\w.=-]{10,150}|[a-z0-9][a-z0-9+/]{11,}={0,3})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
+    entropy: 3.5,
+    keywords: ["access", "api", "auth", "key", "credential", "creds", "passwd", "password", "secret", "token"]
+  },
+  {
+    id: "github-app-token",
+    regex: new RegExp(`(?:ghu|ghs)_[0-9a-zA-Z]{36}`, "gi"),
+    entropy: 3,
+    keywords: ["ghu_", "ghs_"]
+  },
+  {
+    id: "github-fine-grained-pat",
+    regex: new RegExp(`github_pat_\\w{82}`, "gi"),
+    entropy: 3,
+    keywords: ["github_pat_"]
+  },
+  { id: "github-oauth", regex: new RegExp(`gho_[0-9a-zA-Z]{36}`, "gi"), entropy: 3, keywords: ["gho_"] },
+  { id: "github-pat", regex: new RegExp(`ghp_[0-9a-zA-Z]{36}`, "gi"), entropy: 3, keywords: ["ghp_"] },
+  { id: "github-refresh-token", regex: new RegExp(`ghr_[0-9a-zA-Z]{36}`, "gi"), entropy: 3, keywords: ["ghr_"] },
+  {
+    id: "gitlab-cicd-job-token",
+    regex: new RegExp(`glcbt-[0-9a-zA-Z]{1,5}_[0-9a-zA-Z_-]{20}`, "gi"),
+    entropy: 3,
+    keywords: ["glcbt-"]
+  },
+  { id: "gitlab-deploy-token", regex: new RegExp(`gldt-[0-9a-zA-Z_\\-]{20}`, "gi"), entropy: 3, keywords: ["gldt-"] },
+  {
+    id: "gitlab-feature-flag-client-token",
+    regex: new RegExp(`glffct-[0-9a-zA-Z_\\-]{20}`, "gi"),
+    entropy: 3,
+    keywords: ["glffct-"]
+  },
+  { id: "gitlab-feed-token", regex: new RegExp(`glft-[0-9a-zA-Z_\\-]{20}`, "gi"), entropy: 3, keywords: ["glft-"] },
+  {
+    id: "gitlab-incoming-mail-token",
+    regex: new RegExp(`glimt-[0-9a-zA-Z_\\-]{25}`, "gi"),
+    entropy: 3,
+    keywords: ["glimt-"]
+  },
+  {
+    id: "gitlab-kubernetes-agent-token",
+    regex: new RegExp(`glagent-[0-9a-zA-Z_\\-]{50}`, "gi"),
+    entropy: 3,
+    keywords: ["glagent-"]
+  },
+  {
+    id: "gitlab-oauth-app-secret",
+    regex: new RegExp(`gloas-[0-9a-zA-Z_\\-]{64}`, "gi"),
+    entropy: 3,
+    keywords: ["gloas-"]
+  },
+  { id: "gitlab-pat", regex: new RegExp(`glpat-[\\w-]{20}`, "gi"), entropy: 3, keywords: ["glpat-"] },
+  {
+    id: "gitlab-pat-routable",
+    regex: new RegExp(`\\bglpat-[0-9a-zA-Z_-]{27,300}\\.[0-9a-z]{2}[0-9a-z]{7}\\b`, "gi"),
+    entropy: 4,
+    keywords: ["glpat-"]
+  },
+  { id: "gitlab-ptt", regex: new RegExp(`glptt-[0-9a-f]{40}`, "gi"), entropy: 3, keywords: ["glptt-"] },
+  { id: "gitlab-rrt", regex: new RegExp(`GR1348941[\\w-]{20}`, "gi"), entropy: 3, keywords: ["gr1348941"] },
+  {
+    id: "gitlab-runner-authentication-token",
+    regex: new RegExp(`glrt-[0-9a-zA-Z_\\-]{20}`, "gi"),
+    entropy: 3,
+    keywords: ["glrt-"]
+  },
+  {
+    id: "gitlab-runner-authentication-token-routable",
+    regex: new RegExp(`\\bglrt-t\\d_[0-9a-zA-Z_\\-]{27,300}\\.[0-9a-z]{2}[0-9a-z]{7}\\b`, "gi"),
+    entropy: 4,
+    keywords: ["glrt-"]
+  },
+  { id: "gitlab-scim-token", regex: new RegExp(`glsoat-[0-9a-zA-Z_\\-]{20}`, "gi"), entropy: 3, keywords: ["glsoat-"] },
+  {
+    id: "gitlab-session-cookie",
+    regex: new RegExp(`_gitlab_session=[0-9a-z]{32}`, "gi"),
+    entropy: 3,
+    keywords: ["_gitlab_session="]
+  },
+  {
+    id: "gitter-access-token",
+    regex: new RegExp(`[\\w.-]{0,50}?(?:gitter)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}([a-z0-9_-]{40})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
+    keywords: ["gitter"]
+  },
+  {
+    id: "gocardless-api-token",
+    regex: new RegExp(`[\\w.-]{0,50}?(?:gocardless)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}(live_[a-z0-9\\-_=]{40})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
+    keywords: ["live_", "gocardless"]
+  },
+  {
+    id: "grafana-api-key",
+    regex: new RegExp(`\\b(eyJrIjoi[A-Za-z0-9]{70,400}={0,3})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
+    entropy: 3,
+    keywords: ["eyjrijoi"]
+  },
+  {
+    id: "grafana-cloud-api-token",
+    regex: new RegExp(`\\b(glc_[A-Za-z0-9+/]{32,400}={0,3})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
+    entropy: 3,
+    keywords: ["glc_"]
+  },
+  {
+    id: "grafana-service-account-token",
+    regex: new RegExp(`\\b(glsa_[A-Za-z0-9]{32}_[A-Fa-f0-9]{8})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
+    entropy: 3,
+    keywords: ["glsa_"]
+  },
+  {
+    id: "harness-api-key",
+    regex: new RegExp(`(?:pat|sat)\\.[a-zA-Z0-9_-]{22}\\.[a-zA-Z0-9]{24}\\.[a-zA-Z0-9]{20}`, "gi"),
+    keywords: ["pat.", "sat."]
+  },
+  {
+    id: "hashicorp-tf-api-token",
+    regex: new RegExp(`[a-z0-9]{14}\\.(?:atlasv1)\\.[a-z0-9\\-_=]{60,70}`, "gi"),
+    entropy: 3.5,
+    keywords: ["atlasv1"]
+  },
+  {
+    id: "hashicorp-tf-password",
+    regex: new RegExp(`[\\w.-]{0,50}?(?:administrator_login_password|password)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}("[a-z0-9=_\\-]{8,20}")(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
+    entropy: 2,
+    keywords: ["administrator_login_password", "password"]
+  },
+  {
+    id: "heroku-api-key",
+    regex: new RegExp(`[\\w.-]{0,50}?(?:heroku)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
+    keywords: ["heroku"]
+  },
+  {
+    id: "heroku-api-key-v2",
+    regex: new RegExp(`\\b((HRKU-AA[0-9a-zA-Z_-]{58}))(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
+    entropy: 4,
+    keywords: ["hrku-aa"]
+  },
+  {
+    id: "hubspot-api-key",
+    regex: new RegExp(`[\\w.-]{0,50}?(?:hubspot)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}([0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
+    keywords: ["hubspot"]
+  },
+  {
+    id: "huggingface-access-token",
+    regex: new RegExp(`\\b(hf_(?:[a-z]{34}))(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
+    entropy: 2,
+    keywords: ["hf_"]
+  },
+  {
+    id: "huggingface-organization-api-token",
+    regex: new RegExp(`\\b(api_org_(?:[a-z]{34}))(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
+    entropy: 2,
+    keywords: ["api_org_"]
+  },
+  {
+    id: "infracost-api-token",
+    regex: new RegExp(`\\b(ico-[a-zA-Z0-9]{32})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
+    entropy: 3,
+    keywords: ["ico-"]
+  },
+  {
+    id: "intercom-api-key",
+    regex: new RegExp(`[\\w.-]{0,50}?(?:intercom)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}([a-z0-9=_\\-]{60})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
+    keywords: ["intercom"]
+  },
+  {
+    id: "intra42-client-secret",
+    regex: new RegExp(`\\b(s-s4t2(?:ud|af)-[abcdef0123456789]{64})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
+    entropy: 3,
+    keywords: ["intra", "s-s4t2ud-", "s-s4t2af-"]
+  },
+  {
+    id: "jfrog-api-key",
+    regex: new RegExp(`[\\w.-]{0,50}?(?:jfrog|artifactory|bintray|xray)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}([a-z0-9]{73})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
+    keywords: ["jfrog", "artifactory", "bintray", "xray"]
+  },
+  {
+    id: "jfrog-identity-token",
+    regex: new RegExp(`[\\w.-]{0,50}?(?:jfrog|artifactory|bintray|xray)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}([a-z0-9]{64})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
+    keywords: ["jfrog", "artifactory", "bintray", "xray"]
+  },
+  {
+    id: "jwt",
+    regex: new RegExp(`\\b(ey[a-zA-Z0-9]{17,}\\.ey[a-zA-Z0-9\\/\\\\_-]{17,}\\.(?:[a-zA-Z0-9\\/\\\\_-]{10,}={0,2})?)(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
+    entropy: 3,
+    keywords: ["ey"]
+  },
+  {
+    id: "kraken-access-token",
+    regex: new RegExp(`[\\w.-]{0,50}?(?:kraken)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}([a-z0-9\\/=_\\+\\-]{80,90})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
+    keywords: ["kraken"]
+  },
+  {
+    id: "kubernetes-secret-yaml",
+    regex: new RegExp(`(?:\\bkind:[ \\t]*["']?\\bsecret\\b["']?[\\s\\S]{0,200}?\\bdata:[\\s\\S]{0,100}?\\s+([\\w.-]+:(?:[ \\t]*(?:\\||>[-+]?)\\s+)?[ \\t]*(?:["']?[a-z0-9+/]{10,}={0,3}["']?|\\{\\{[ \\t\\w"|$:=,.-]+}}|""|''))|\\bdata:[\\s\\S]{0,100}?\\s+([\\w.-]+:(?:[ \\t]*(?:\\||>[-+]?)\\s+)?[ \\t]*(?:["']?[a-z0-9+/]{10,}={0,3}["']?|\\{\\{[ \\t\\w"|$:=,.-]+}}|""|''))[\\s\\S]{0,200}?\\bkind:[ \\t]*["']?\\bsecret\\b["']?)`, "gi"),
+    keywords: ["secret"]
+  },
+  {
+    id: "kucoin-access-token",
+    regex: new RegExp(`[\\w.-]{0,50}?(?:kucoin)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}([a-f0-9]{24})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
+    keywords: ["kucoin"]
+  },
+  {
+    id: "kucoin-secret-key",
+    regex: new RegExp(`[\\w.-]{0,50}?(?:kucoin)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
+    keywords: ["kucoin"]
+  },
+  {
+    id: "launchdarkly-access-token",
+    regex: new RegExp(`[\\w.-]{0,50}?(?:launchdarkly)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}([a-z0-9=_\\-]{40})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
+    keywords: ["launchdarkly"]
+  },
+  { id: "linear-api-key", regex: new RegExp(`lin_api_[a-z0-9]{40}`, "gi"), entropy: 2, keywords: ["lin_api_"] },
+  {
+    id: "linear-client-secret",
+    regex: new RegExp(`[\\w.-]{0,50}?(?:linear)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}([a-f0-9]{32})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
+    entropy: 2,
+    keywords: ["linear"]
+  },
+  {
+    id: "linkedin-client-id",
+    regex: new RegExp(`[\\w.-]{0,50}?(?:linked[_-]?in)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}([a-z0-9]{14})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
+    entropy: 2,
+    keywords: ["linkedin", "linked_in", "linked-in"]
+  },
+  {
+    id: "linkedin-client-secret",
+    regex: new RegExp(`[\\w.-]{0,50}?(?:linked[_-]?in)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}([a-z0-9]{16})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
+    entropy: 2,
+    keywords: ["linkedin", "linked_in", "linked-in"]
+  },
+  {
+    id: "lob-api-key",
+    regex: new RegExp(`[\\w.-]{0,50}?(?:lob)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}((live|test)_[a-f0-9]{35})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
+    keywords: ["test_", "live_"]
+  },
+  {
+    id: "lob-pub-api-key",
+    regex: new RegExp(`[\\w.-]{0,50}?(?:lob)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}((test|live)_pub_[a-f0-9]{31})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
+    keywords: ["test_pub", "live_pub", "_pub"]
+  },
+  {
+    id: "looker-client-id",
+    regex: new RegExp(`[\\w.-]{0,50}?(?:looker)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}([a-z0-9]{20})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
+    keywords: ["looker"]
+  },
+  {
+    id: "looker-client-secret",
+    regex: new RegExp(`[\\w.-]{0,50}?(?:looker)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}([a-z0-9]{24})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
+    keywords: ["looker"]
+  },
+  {
+    id: "mailchimp-api-key",
+    regex: new RegExp(`[\\w.-]{0,50}?(?:MailchimpSDK.initialize|mailchimp)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}([a-f0-9]{32}-us\\d\\d)(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
+    keywords: ["mailchimp"]
+  },
+  {
+    id: "mailgun-private-api-token",
+    regex: new RegExp(`[\\w.-]{0,50}?(?:mailgun)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}(key-[a-f0-9]{32})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
+    keywords: ["mailgun"]
+  },
+  {
+    id: "mailgun-pub-key",
+    regex: new RegExp(`[\\w.-]{0,50}?(?:mailgun)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}(pubkey-[a-f0-9]{32})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
+    keywords: ["mailgun"]
+  },
+  {
+    id: "mailgun-signing-key",
+    regex: new RegExp(`[\\w.-]{0,50}?(?:mailgun)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}([a-h0-9]{32}-[a-h0-9]{8}-[a-h0-9]{8})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
+    keywords: ["mailgun"]
+  },
+  {
+    id: "mapbox-api-token",
+    regex: new RegExp(`[\\w.-]{0,50}?(?:mapbox)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}(pk\\.[a-z0-9]{60}\\.[a-z0-9]{22})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
+    keywords: ["mapbox"]
+  },
+  {
+    id: "mattermost-access-token",
+    regex: new RegExp(`[\\w.-]{0,50}?(?:mattermost)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}([a-z0-9]{26})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
+    keywords: ["mattermost"]
+  },
+  {
+    id: "maxmind-license-key",
+    regex: new RegExp(`\\b([A-Za-z0-9]{6}_[A-Za-z0-9]{29}_mmk)(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
+    entropy: 4,
+    keywords: ["_mmk"]
+  },
+  {
+    id: "messagebird-api-token",
+    regex: new RegExp(`[\\w.-]{0,50}?(?:message[_-]?bird)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}([a-z0-9]{25})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
+    keywords: ["messagebird", "message-bird", "message_bird"]
+  },
+  {
+    id: "messagebird-client-id",
+    regex: new RegExp(`[\\w.-]{0,50}?(?:message[_-]?bird)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
+    keywords: ["messagebird", "message-bird", "message_bird"]
+  },
+  {
+    id: "microsoft-teams-webhook",
+    regex: new RegExp(`https://[a-z0-9]+\\.webhook\\.office\\.com/webhookb2/[a-z0-9]{8}-([a-z0-9]{4}-){3}[a-z0-9]{12}@[a-z0-9]{8}-([a-z0-9]{4}-){3}[a-z0-9]{12}/IncomingWebhook/[a-z0-9]{32}/[a-z0-9]{8}-([a-z0-9]{4}-){3}[a-z0-9]{12}`, "gi"),
+    keywords: ["webhook.office.com", "webhookb2", "incomingwebhook"]
+  },
+  {
+    id: "netlify-access-token",
+    regex: new RegExp(`[\\w.-]{0,50}?(?:netlify)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}([a-z0-9=_\\-]{40,46})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
+    keywords: ["netlify"]
+  },
+  {
+    id: "new-relic-browser-api-token",
+    regex: new RegExp(`[\\w.-]{0,50}?(?:new-relic|newrelic|new_relic)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}(NRJS-[a-f0-9]{19})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
+    keywords: ["nrjs-"]
+  },
+  {
+    id: "new-relic-insert-key",
+    regex: new RegExp(`[\\w.-]{0,50}?(?:new-relic|newrelic|new_relic)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}(NRII-[a-z0-9-]{32})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
+    keywords: ["nrii-"]
+  },
+  {
+    id: "new-relic-user-api-id",
+    regex: new RegExp(`[\\w.-]{0,50}?(?:new-relic|newrelic|new_relic)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}([a-z0-9]{64})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
+    keywords: ["new-relic", "newrelic", "new_relic"]
+  },
+  {
+    id: "new-relic-user-api-key",
+    regex: new RegExp(`[\\w.-]{0,50}?(?:new-relic|newrelic|new_relic)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}(NRAK-[a-z0-9]{27})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
+    keywords: ["nrak"]
+  },
+  {
+    id: "notion-api-token",
+    regex: new RegExp(`\\b(ntn_[0-9]{11}[A-Za-z0-9]{32}[A-Za-z0-9]{3})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
+    entropy: 4,
+    keywords: ["ntn_"]
+  },
+  {
+    id: "npm-access-token",
+    regex: new RegExp(`\\b(npm_[a-z0-9]{36})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
+    entropy: 2,
+    keywords: ["npm_"]
+  },
+  {
+    id: "nuget-config-password",
+    regex: new RegExp(`<add key=\\"(?:(?:ClearText)?Password)\\"\\s*value=\\"(.{8,})\\"\\s*/>`, "gi"),
+    entropy: 1,
+    keywords: ["<add key="]
+  },
+  {
+    id: "nytimes-access-token",
+    regex: new RegExp(`[\\w.-]{0,50}?(?:nytimes|new-york-times,|newyorktimes)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}([a-z0-9=_\\-]{32})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
+    keywords: ["nytimes", "new-york-times", "newyorktimes"]
+  },
+  {
+    id: "octopus-deploy-api-key",
+    regex: new RegExp(`\\b(API-[A-Z0-9]{26})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
+    entropy: 3,
+    keywords: ["api-"]
+  },
+  {
+    id: "okta-access-token",
+    regex: new RegExp(`[\\w.-]{0,50}?(?:[\\w.-]{0,50}?(?:(?:[Oo]kta|OKTA))(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3})(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}(00[\\w=\\-]{40})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
+    entropy: 4,
+    keywords: ["okta"]
+  },
+  {
+    id: "openai-api-key",
+    regex: new RegExp(`\\b(sk-(?:proj|svcacct|admin)-(?:[A-Za-z0-9_-]{74}|[A-Za-z0-9_-]{58})T3BlbkFJ(?:[A-Za-z0-9_-]{74}|[A-Za-z0-9_-]{58})\\b|sk-[a-zA-Z0-9]{20}T3BlbkFJ[a-zA-Z0-9]{20})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
+    entropy: 3,
+    keywords: ["t3blbkfj"]
+  },
+  {
+    id: "openshift-user-token",
+    regex: new RegExp(`\\b(sha256~[\\w-]{43})(?:[^\\w-]|$)`, "gi"),
+    entropy: 3.5,
+    keywords: ["sha256~"]
+  },
+  {
+    id: "perplexity-api-key",
+    regex: new RegExp(`\\b(pplx-[a-zA-Z0-9]{48})(?:[\\x60'"\\s;]|\\\\[nr]|$|\\b)`, "gi"),
+    entropy: 4,
+    keywords: ["pplx-"]
+  },
+  {
+    id: "plaid-api-token",
+    regex: new RegExp(`[\\w.-]{0,50}?(?:plaid)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}(access-(?:sandbox|development|production)-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
+    keywords: ["plaid"]
+  },
+  {
+    id: "plaid-client-id",
+    regex: new RegExp(`[\\w.-]{0,50}?(?:plaid)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}([a-z0-9]{24})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
+    entropy: 3.5,
+    keywords: ["plaid"]
+  },
+  {
+    id: "plaid-secret-key",
+    regex: new RegExp(`[\\w.-]{0,50}?(?:plaid)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}([a-z0-9]{30})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
+    entropy: 3.5,
+    keywords: ["plaid"]
+  },
+  {
+    id: "planetscale-api-token",
+    regex: new RegExp(`\\b(pscale_tkn_[\\w=\\.-]{32,64})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
+    entropy: 3,
+    keywords: ["pscale_tkn_"]
+  },
+  {
+    id: "planetscale-oauth-token",
+    regex: new RegExp(`\\b(pscale_oauth_[\\w=\\.-]{32,64})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
+    entropy: 3,
+    keywords: ["pscale_oauth_"]
+  },
+  {
+    id: "planetscale-password",
+    regex: new RegExp(`\\b(pscale_pw_[\\w=\\.-]{32,64})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
+    entropy: 3,
+    keywords: ["pscale_pw_"]
+  },
+  {
+    id: "postman-api-token",
+    regex: new RegExp(`\\b(PMAK-[a-f0-9]{24}\\-[a-f0-9]{34})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
+    entropy: 3,
+    keywords: ["pmak-"]
+  },
+  {
+    id: "prefect-api-token",
+    regex: new RegExp(`\\b(pnu_[a-zA-Z0-9]{36})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
+    entropy: 2,
+    keywords: ["pnu_"]
+  },
+  {
+    id: "private-key",
+    regex: new RegExp(`-----BEGIN[ A-Z0-9_-]{0,100}PRIVATE KEY(?: BLOCK)?-----[\\s\\S-]{64,}?KEY(?: BLOCK)?-----`, "gi"),
+    keywords: ["-----begin"]
+  },
+  {
+    id: "privateai-api-token",
+    regex: new RegExp(`[\\w.-]{0,50}?(?:[\\w.-]{0,50}?(?:private[_-]?ai)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3})(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}([a-z0-9]{32})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
+    entropy: 3,
+    keywords: ["privateai", "private_ai", "private-ai"]
+  },
+  {
+    id: "pulumi-api-token",
+    regex: new RegExp(`\\b(pul-[a-f0-9]{40})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
+    entropy: 2,
+    keywords: ["pul-"]
+  },
+  {
+    id: "pypi-upload-token",
+    regex: new RegExp(`pypi-AgEIcHlwaS5vcmc[\\w-]{50,1000}`, "gi"),
+    entropy: 3,
+    keywords: ["pypi-ageichlwas5vcmc"]
+  },
+  {
+    id: "rapidapi-access-token",
+    regex: new RegExp(`[\\w.-]{0,50}?(?:rapidapi)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}([a-z0-9_-]{50})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
+    keywords: ["rapidapi"]
+  },
+  {
+    id: "readme-api-token",
+    regex: new RegExp(`\\b(rdme_[a-z0-9]{70})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
+    entropy: 2,
+    keywords: ["rdme_"]
+  },
+  {
+    id: "rubygems-api-token",
+    regex: new RegExp(`\\b(rubygems_[a-f0-9]{48})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
+    entropy: 2,
+    keywords: ["rubygems_"]
+  },
+  {
+    id: "scalingo-api-token",
+    regex: new RegExp(`\\b(tk-us-[\\w-]{48})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
+    entropy: 2,
+    keywords: ["tk-us-"]
+  },
+  {
+    id: "sendbird-access-id",
+    regex: new RegExp(`[\\w.-]{0,50}?(?:sendbird)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
+    keywords: ["sendbird"]
+  },
+  {
+    id: "sendbird-access-token",
+    regex: new RegExp(`[\\w.-]{0,50}?(?:sendbird)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}([a-f0-9]{40})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
+    keywords: ["sendbird"]
+  },
+  {
+    id: "sendgrid-api-token",
+    regex: new RegExp(`\\b(SG\\.[a-z0-9=_\\-\\.]{66})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
+    entropy: 2,
+    keywords: ["sg."]
+  },
+  {
+    id: "sendinblue-api-token",
+    regex: new RegExp(`\\b(xkeysib-[a-f0-9]{64}\\-[a-z0-9]{16})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
+    entropy: 2,
+    keywords: ["xkeysib-"]
+  },
+  {
+    id: "sentry-access-token",
+    regex: new RegExp(`[\\w.-]{0,50}?(?:sentry)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}([a-f0-9]{64})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
+    entropy: 3,
+    keywords: ["sentry"]
+  },
+  {
+    id: "sentry-org-token",
+    regex: new RegExp(`\\bsntrys_eyJpYXQiO[a-zA-Z0-9+/]{10,200}(?:LCJyZWdpb25fdXJs|InJlZ2lvbl91cmwi|cmVnaW9uX3VybCI6)[a-zA-Z0-9+/]{10,200}={0,2}_[a-zA-Z0-9+/]{43}(?:[^a-zA-Z0-9+/]|$)`, "gi"),
+    entropy: 4.5,
+    keywords: ["sntrys_eyjpyxqio"]
+  },
+  {
+    id: "sentry-user-token",
+    regex: new RegExp(`\\b(sntryu_[a-f0-9]{64})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
+    entropy: 3.5,
+    keywords: ["sntryu_"]
+  },
+  {
+    id: "settlemint-application-access-token",
+    regex: new RegExp(`\\b(sm_aat_[a-zA-Z0-9]{16})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
+    entropy: 3,
+    keywords: ["sm_aat"]
+  },
+  {
+    id: "settlemint-personal-access-token",
+    regex: new RegExp(`\\b(sm_pat_[a-zA-Z0-9]{16})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
+    entropy: 3,
+    keywords: ["sm_pat"]
+  },
+  {
+    id: "settlemint-service-access-token",
+    regex: new RegExp(`\\b(sm_sat_[a-zA-Z0-9]{16})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
+    entropy: 3,
+    keywords: ["sm_sat"]
+  },
+  {
+    id: "shippo-api-token",
+    regex: new RegExp(`\\b(shippo_(?:live|test)_[a-fA-F0-9]{40})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
+    entropy: 2,
+    keywords: ["shippo_"]
+  },
+  { id: "shopify-access-token", regex: new RegExp(`shpat_[a-fA-F0-9]{32}`, "gi"), entropy: 2, keywords: ["shpat_"] },
+  {
+    id: "shopify-custom-access-token",
+    regex: new RegExp(`shpca_[a-fA-F0-9]{32}`, "gi"),
+    entropy: 2,
+    keywords: ["shpca_"]
+  },
+  {
+    id: "shopify-private-app-access-token",
+    regex: new RegExp(`shppa_[a-fA-F0-9]{32}`, "gi"),
+    entropy: 2,
+    keywords: ["shppa_"]
+  },
+  { id: "shopify-shared-secret", regex: new RegExp(`shpss_[a-fA-F0-9]{32}`, "gi"), entropy: 2, keywords: ["shpss_"] },
+  {
+    id: "sidekiq-secret",
+    regex: new RegExp(`[\\w.-]{0,50}?(?:BUNDLE_ENTERPRISE__CONTRIBSYS__COM|BUNDLE_GEMS__CONTRIBSYS__COM)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}([a-f0-9]{8}:[a-f0-9]{8})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
+    keywords: ["bundle_enterprise__contribsys__com", "bundle_gems__contribsys__com"]
+  },
+  {
+    id: "sidekiq-sensitive-url",
+    regex: new RegExp(`\\bhttps?://([a-f0-9]{8}:[a-f0-9]{8})@(?:gems.contribsys.com|enterprise.contribsys.com)(?:[\\/|\\#|\\?|:]|$)`, "gi"),
+    keywords: ["gems.contribsys.com", "enterprise.contribsys.com"]
+  },
+  {
+    id: "slack-app-token",
+    regex: new RegExp(`xapp-\\d-[A-Z0-9]+-\\d+-[a-z0-9]+`, "gi"),
+    entropy: 2,
+    keywords: ["xapp"]
+  },
+  {
+    id: "slack-bot-token",
+    regex: new RegExp(`xoxb-[0-9]{10,13}-[0-9]{10,13}[a-zA-Z0-9-]*`, "gi"),
+    entropy: 3,
+    keywords: ["xoxb"]
+  },
+  {
+    id: "slack-config-access-token",
+    regex: new RegExp(`xoxe.xox[bp]-\\d-[A-Z0-9]{163,166}`, "gi"),
+    entropy: 2,
+    keywords: ["xoxe.xoxb-", "xoxe.xoxp-"]
+  },
+  {
+    id: "slack-config-refresh-token",
+    regex: new RegExp(`xoxe-\\d-[A-Z0-9]{146}`, "gi"),
+    entropy: 2,
+    keywords: ["xoxe-"]
+  },
+  {
+    id: "slack-legacy-bot-token",
+    regex: new RegExp(`xoxb-[0-9]{8,14}-[a-zA-Z0-9]{18,26}`, "gi"),
+    entropy: 2,
+    keywords: ["xoxb"]
+  },
+  {
+    id: "slack-legacy-token",
+    regex: new RegExp(`xox[os]-\\d+-\\d+-\\d+-[a-fA-F\\d]+`, "gi"),
+    entropy: 2,
+    keywords: ["xoxo", "xoxs"]
+  },
+  {
+    id: "slack-legacy-workspace-token",
+    regex: new RegExp(`xox[ar]-(?:\\d-)?[0-9a-zA-Z]{8,48}`, "gi"),
+    entropy: 2,
+    keywords: ["xoxa", "xoxr"]
+  },
+  {
+    id: "slack-user-token",
+    regex: new RegExp(`xox[pe](?:-[0-9]{10,13}){3}-[a-zA-Z0-9-]{28,34}`, "gi"),
+    entropy: 2,
+    keywords: ["xoxp-", "xoxe-"]
+  },
+  {
+    id: "slack-webhook-url",
+    regex: new RegExp(`(?:https?://)?hooks.slack.com/(?:services|workflows|triggers)/[A-Za-z0-9+/]{43,56}`, "gi"),
+    keywords: ["hooks.slack.com"]
+  },
+  {
+    id: "snyk-api-token",
+    regex: new RegExp(`[\\w.-]{0,50}?(?:snyk[_.-]?(?:(?:api|oauth)[_.-]?)?(?:key|token))(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
+    keywords: ["snyk"]
+  },
+  {
+    id: "sonar-api-token",
+    regex: new RegExp(`[\\w.-]{0,50}?(?:sonar[_.-]?(login|token))(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}((?:squ_|sqp_|sqa_)?[a-z0-9=_\\-]{40})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
+    keywords: ["sonar"]
+  },
+  {
+    id: "sourcegraph-access-token",
+    regex: new RegExp(`\\b(\\b(sgp_(?:[a-fA-F0-9]{16}|local)_[a-fA-F0-9]{40}|sgp_[a-fA-F0-9]{40}|[a-fA-F0-9]{40})\\b)(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
+    entropy: 3,
+    keywords: ["sgp_", "sourcegraph"]
+  },
+  {
+    id: "square-access-token",
+    regex: new RegExp(`\\b((?:EAAA|sq0atp-)[\\w-]{22,60})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
+    entropy: 2,
+    keywords: ["sq0atp-", "eaaa"]
+  },
+  {
+    id: "squarespace-access-token",
+    regex: new RegExp(`[\\w.-]{0,50}?(?:squarespace)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
+    keywords: ["squarespace"]
+  },
+  {
+    id: "stripe-access-token",
+    regex: new RegExp(`\\b((?:sk|rk)_(?:test|live|prod)_[a-zA-Z0-9]{10,99})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
+    entropy: 2,
+    keywords: ["sk_test", "sk_live", "sk_prod", "rk_test", "rk_live", "rk_prod"]
+  },
+  {
+    id: "sumologic-access-id",
+    regex: new RegExp(`[\\w.-]{0,50}?(?:[\\w.-]{0,50}?(?:(?:[Ss]umo|SUMO))(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3})(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}(su[a-zA-Z0-9]{12})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
+    entropy: 3,
+    keywords: ["sumo"]
+  },
+  {
+    id: "sumologic-access-token",
+    regex: new RegExp(`[\\w.-]{0,50}?(?:(?:[Ss]umo|SUMO))(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}([a-z0-9]{64})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
+    entropy: 3,
+    keywords: ["sumo"]
+  },
+  {
+    id: "telegram-bot-api-token",
+    regex: new RegExp(`[\\w.-]{0,50}?(?:telegr)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}([0-9]{5,16}:(?:A)[a-z0-9_\\-]{34})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
+    keywords: ["telegr"]
+  },
+  {
+    id: "travisci-access-token",
+    regex: new RegExp(`[\\w.-]{0,50}?(?:travis)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}([a-z0-9]{22})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
+    keywords: ["travis"]
+  },
+  { id: "twilio-api-key", regex: new RegExp(`SK[0-9a-fA-F]{32}`, "gi"), entropy: 3, keywords: ["sk"] },
+  {
+    id: "twitch-api-token",
+    regex: new RegExp(`[\\w.-]{0,50}?(?:twitch)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}([a-z0-9]{30})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
+    keywords: ["twitch"]
+  },
+  {
+    id: "twitter-access-secret",
+    regex: new RegExp(`[\\w.-]{0,50}?(?:twitter)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}([a-z0-9]{45})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
+    keywords: ["twitter"]
+  },
+  {
+    id: "twitter-access-token",
+    regex: new RegExp(`[\\w.-]{0,50}?(?:twitter)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}([0-9]{15,25}-[a-zA-Z0-9]{20,40})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
+    keywords: ["twitter"]
+  },
+  {
+    id: "twitter-api-key",
+    regex: new RegExp(`[\\w.-]{0,50}?(?:twitter)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}([a-z0-9]{25})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
+    keywords: ["twitter"]
+  },
+  {
+    id: "twitter-api-secret",
+    regex: new RegExp(`[\\w.-]{0,50}?(?:twitter)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}([a-z0-9]{50})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
+    keywords: ["twitter"]
+  },
+  {
+    id: "twitter-bearer-token",
+    regex: new RegExp(`[\\w.-]{0,50}?(?:twitter)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}(A{22}[a-zA-Z0-9%]{80,100})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
+    keywords: ["twitter"]
+  },
+  {
+    id: "typeform-api-token",
+    regex: new RegExp(`[\\w.-]{0,50}?(?:typeform)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}(tfp_[a-z0-9\\-_\\.=]{59})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
+    keywords: ["tfp_"]
+  },
+  {
+    id: "vault-batch-token",
+    regex: new RegExp(`\\b(hvb\\.[\\w-]{138,300})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
+    entropy: 4,
+    keywords: ["hvb."]
+  },
+  {
+    id: "vault-service-token",
+    regex: new RegExp(`\\b((?:hvs\\.[\\w-]{90,120}|s\\.(?:[a-z0-9]{24})))(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
+    entropy: 3.5,
+    keywords: ["hvs.", "s."]
+  },
+  {
+    id: "yandex-access-token",
+    regex: new RegExp(`[\\w.-]{0,50}?(?:yandex)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}(t1\\.[A-Z0-9a-z_-]+[=]{0,2}\\.[A-Z0-9a-z_-]{86}[=]{0,2})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
+    keywords: ["yandex"]
+  },
+  {
+    id: "yandex-api-key",
+    regex: new RegExp(`[\\w.-]{0,50}?(?:yandex)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}(AQVN[A-Za-z0-9_\\-]{35,38})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
+    keywords: ["yandex"]
+  },
+  {
+    id: "yandex-aws-access-token",
+    regex: new RegExp(`[\\w.-]{0,50}?(?:yandex)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}(YC[a-zA-Z0-9_\\-]{38})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
+    keywords: ["yandex"]
+  },
+  {
+    id: "zendesk-secret-key",
+    regex: new RegExp(`[\\w.-]{0,50}?(?:zendesk)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}([a-z0-9]{40})(?:[\\x60'"\\s;]|\\\\[nr]|$)`, "gi"),
+    keywords: ["zendesk"]
+  },
+  {
+    id: "high-entropy-secret",
+    regex: new RegExp(`(?<![A-Za-z0-9_\\-./+=])([A-Za-z0-9_\\-./+=]{20,200})(?![A-Za-z0-9_\\-./+=])`, "g"),
+    entropy: 4,
+    notHexOnly: true
+  }
+];
+var ALL_KEYWORDS = new Set([
+  "-----begin",
+  "4b1d",
+  "<add key=",
+  "_gitlab_session=",
+  "_mmk",
+  "_pub",
+  "a3-",
+  "a3t",
+  "abia",
+  "absk",
+  "acca",
+  "access",
+  "adafruit",
+  "administrator_login_password",
+  "adobe",
+  "age-secret-key-1",
+  "airtable",
+  "aiza",
+  "akcp",
+  "akia",
+  "algolia",
+  "alibaba",
+  "api",
+  "api-",
+  "api_org_",
+  "artifactory",
+  "asana",
+  "asia",
+  "atatt3",
+  "atlassian",
+  "atlasv1",
+  "auth",
+  "authress_",
+  "beamer",
+  "bedrock-api-key-",
+  "bintray",
+  "bitbucket",
+  "bittrex",
+  "bundle_enterprise__contribsys__com",
+  "bundle_gems__contribsys__com",
+  "clojars_",
+  "cloudflare",
+  "cmvmd",
+  "co_api_key",
+  "codecov",
+  "cohere",
+  "coinbase",
+  "confluence",
+  "confluent",
+  "contentful",
+  "credential",
+  "creds",
+  "curl",
+  "dapi",
+  "datadog",
+  "discord",
+  "dnkey",
+  "doo_v1_",
+  "dop_v1_",
+  "dor_v1_",
+  "dp.pt.",
+  "droneci",
+  "dropbox",
+  "dt0c01.",
+  "duffel_",
+  "eaaa",
+  "eaac",
+  "eaam",
+  "enterprise.contribsys.com",
+  "etsy",
+  "ext_",
+  "ey",
+  "eyjrijoi",
+  "ezak",
+  "eztk",
+  "facebook",
+  "fastly",
+  "finicity",
+  "finnhub",
+  "fio-u-",
+  "flickr",
+  "flwpubk_test",
+  "flwseck_test",
+  "fm1",
+  "fm2_",
+  "fo1_",
+  "freshbooks",
+  "gems.contribsys.com",
+  "gho_",
+  "ghp_",
+  "ghr_",
+  "ghs_",
+  "ghu_",
+  "github_pat_",
+  "gitter",
+  "glagent-",
+  "glc_",
+  "glcbt-",
+  "gldt-",
+  "glffct-",
+  "glft-",
+  "glimt-",
+  "gloas-",
+  "glpat-",
+  "glptt-",
+  "glrt-",
+  "glsa_",
+  "glsoat-",
+  "gocardless",
+  "gr1348941",
+  "heroku",
+  "hf_",
+  "hooks.slack.com",
+  "hrku-aa",
+  "hubspot",
+  "hvb.",
+  "hvs.",
+  "ico-",
+  "incomingwebhook",
+  "intercom",
+  "intra",
+  "jfrog",
+  "jira",
+  "key",
+  "kraken",
+  "kucoin",
+  "launchdarkly",
+  "lin_api_",
+  "linear",
+  "linked-in",
+  "linked_in",
+  "linkedin",
+  "live_",
+  "live_pub",
+  "looker",
+  "ltai",
+  "mailchimp",
+  "mailgun",
+  "mapbox",
+  "mattermost",
+  "meraki",
+  "message-bird",
+  "message_bird",
+  "messagebird",
+  "netlify",
+  "new-relic",
+  "new-york-times",
+  "new_relic",
+  "newrelic",
+  "newyorktimes",
+  "npm_",
+  "nrak",
+  "nrii-",
+  "nrjs-",
+  "ntn_",
+  "nytimes",
+  "okta",
+  "ops_",
+  "p8e-",
+  "passwd",
+  "password",
+  "pat.",
+  "plaid",
+  "pmak-",
+  "pnu_",
+  "pplx-",
+  "private-ai",
+  "private_ai",
+  "privateai",
+  "pscale_oauth_",
+  "pscale_pw_",
+  "pscale_tkn_",
+  "pul-",
+  "pypi-ageichlwas5vcmc",
+  "q~",
+  "rapidapi",
+  "rdme_",
+  "rk_live",
+  "rk_prod",
+  "rk_test",
+  "rubygems_",
+  "s-s4t2af-",
+  "s-s4t2ud-",
+  "s.",
+  "sat.",
+  "sc_",
+  "scauth_",
+  "secret",
+  "secret_key",
+  "sendbird",
+  "sentry",
+  "sg.",
+  "sgp_",
+  "sha256~",
+  "shippo_",
+  "shpat_",
+  "shpca_",
+  "shppa_",
+  "shpss_",
+  "sk",
+  "sk-ant-admin01",
+  "sk-ant-api03",
+  "sk_live",
+  "sk_prod",
+  "sk_test",
+  "sm_aat",
+  "sm_pat",
+  "sm_sat",
+  "sntrys_eyjpyxqio",
+  "sntryu_",
+  "snyk",
+  "sonar",
+  "sourcegraph",
+  "sq0atp-",
+  "squarespace",
+  "sumo",
+  "t3blbkfj",
+  "telegr",
+  "test_",
+  "test_pub",
+  "tfp_",
+  "tk-us-",
+  "token",
+  "travis",
+  "twitch",
+  "twitter",
+  "v1.0-",
+  "webhook.office.com",
+  "webhookb2",
+  "xapp",
+  "xkeysib-",
+  "xoxa",
+  "xoxb",
+  "xoxe-",
+  "xoxe.xoxb-",
+  "xoxe.xoxp-",
+  "xoxo",
+  "xoxp-",
+  "xoxr",
+  "xoxs",
+  "xray",
+  "yandex",
+  "zendesk",
+  "zxlk"
+]);
+
+// src/lib/sanitize.ts
+var MAX_SANITIZE_DEPTH = 100;
+var MIN_SECRET_LENGTH = 8;
+var SAFE_KEYS = new Set([
+  "uuid",
+  "parentUuid",
+  "sessionId",
+  "tool_use_id",
+  "sourceToolUseID",
+  "id",
+  "type",
+  "role",
+  "subtype",
+  "level",
+  "stop_reason",
+  "timestamp",
+  "version",
+  "model",
+  "media_type",
+  "name",
+  "cwd",
+  "gitBranch"
+]);
+function mightContainSecrets(content) {
+  const lower = content.toLowerCase();
+  for (const keyword of ALL_KEYWORDS) {
+    if (lower.includes(keyword)) {
+      return true;
+    }
+  }
+  return false;
+}
+function shannonEntropy(data) {
+  if (!data)
+    return 0;
+  const charCounts = new Map;
+  for (const char of data) {
+    charCounts.set(char, (charCounts.get(char) || 0) + 1);
+  }
+  let entropy = 0;
+  const len = data.length;
+  for (const count of charCounts.values()) {
+    const freq = count / len;
+    entropy -= freq * Math.log2(freq);
+  }
+  return entropy;
+}
+function looksLikeFilePath(s) {
+  if (s.endsWith("/"))
+    return true;
+  return s.includes("/") && /\.\w{1,4}$/.test(s);
+}
+var _stats = { calls: 0, keywordHits: 0, regexRuns: 0, totalMs: 0 };
+function getDetectSecretsStats() {
+  return _stats;
+}
+function resetDetectSecretsStats() {
+  _stats = { calls: 0, keywordHits: 0, regexRuns: 0, totalMs: 0 };
+}
+function detectSecrets(content) {
+  const t0 = process.env.DEBUG ? performance.now() : 0;
+  _stats.calls++;
+  if (content.length < MIN_SECRET_LENGTH) {
+    return [];
+  }
+  const matches = [];
+  const lowerContent = content.toLowerCase();
+  const hasAnyKeyword = mightContainSecrets(content);
+  if (hasAnyKeyword)
+    _stats.keywordHits++;
+  for (const rule of SECRET_RULES) {
+    if (rule.keywords && rule.keywords.length > 0) {
+      if (!hasAnyKeyword)
+        continue;
+      const hasKeyword = rule.keywords.some((k) => lowerContent.includes(k));
+      if (!hasKeyword)
+        continue;
+    }
+    _stats.regexRuns++;
+    rule.regex.lastIndex = 0;
+    let match;
+    while ((match = rule.regex.exec(content)) !== null) {
+      const secretValue = match[1] || match[0];
+      const start = match.index;
+      const end = start + match[0].length;
+      const entropy = rule.entropy ? shannonEntropy(secretValue) : undefined;
+      if (rule.entropy && entropy !== undefined && entropy < rule.entropy) {
+        continue;
+      }
+      if (rule.notHexOnly && /^[0-9a-fA-F]+$/.test(secretValue)) {
+        continue;
+      }
+      if (rule.id === "high-entropy-secret" && looksLikeFilePath(secretValue)) {
+        continue;
+      }
+      matches.push({
+        ruleId: rule.id,
+        match: match[0],
+        start,
+        end,
+        entropy
+      });
+      if (match[0].length === 0) {
+        rule.regex.lastIndex++;
+      }
+    }
+  }
+  matches.sort((a, b) => a.start - b.start);
+  const deduped = [];
+  for (const m of matches) {
+    const last = deduped.at(-1);
+    if (last === undefined || m.start >= last.end) {
+      deduped.push(m);
+    }
+  }
+  if (process.env.DEBUG) {
+    _stats.totalMs += performance.now() - t0;
+  }
+  return deduped;
+}
+function sanitizeString(content) {
+  if (content.length < MIN_SECRET_LENGTH) {
+    return content;
+  }
+  const secrets = detectSecrets(content);
+  if (secrets.length === 0) {
+    return content;
+  }
+  let result = content;
+  for (let i = secrets.length - 1;i >= 0; i--) {
+    const secret = secrets[i];
+    result = `${result.slice(0, secret.start)}[REDACTED:${secret.ruleId}]${result.slice(secret.end)}`;
+  }
+  return result;
+}
+function sanitizeDeep(value, depth = 0) {
+  if (depth > MAX_SANITIZE_DEPTH)
+    return value;
+  if (value === null || value === undefined)
+    return value;
+  if (typeof value === "string")
+    return sanitizeString(value);
+  if (Array.isArray(value))
+    return value.map((item) => sanitizeDeep(item, depth + 1));
+  if (typeof value === "object") {
+    const result = {};
+    for (const [key, val] of Object.entries(value)) {
+      if (SAFE_KEYS.has(key) && typeof val === "string") {
+        result[key] = val;
+      } else {
+        result[key] = sanitizeDeep(val, depth + 1);
+      }
+    }
+    return result;
+  }
+  return value;
+}
+
+// src/lib/auth.ts
+import { mkdir as mkdir2 } from "fs/promises";
+var WORKOS_API_URL = "https://api.workos.com/user_management";
+var AuthUserSchema = exports_external.object({
+  id: exports_external.string(),
+  email: exports_external.string(),
+  first_name: exports_external.string().optional(),
+  last_name: exports_external.string().optional()
+});
+var AuthDataSchema = exports_external.object({
+  access_token: exports_external.string(),
+  refresh_token: exports_external.string(),
+  user: AuthUserSchema,
+  authenticated_at: exports_external.number().optional()
+});
+function decodeJwtPayload(token) {
+  try {
+    const parts = token.split(".");
+    if (parts.length !== 3)
+      return null;
+    let payload = parts[1];
+    const padding = 4 - payload.length % 4;
+    if (padding < 4) {
+      payload += "=".repeat(padding);
+    }
+    return JSON.parse(atob(payload));
+  } catch {
+    return null;
+  }
+}
+function isTokenExpired(token) {
+  const payload = decodeJwtPayload(token);
+  if (!payload || typeof payload.exp !== "number")
+    return true;
+  return payload.exp <= Math.floor(Date.now() / 1000);
+}
+function isErrorResult(result) {
+  return result !== null && typeof result === "object" && "error" in result;
+}
+var isAuthError = isErrorResult;
+async function loadAuthData() {
+  try {
+    const file2 = Bun.file(AUTH_FILE);
+    if (!await file2.exists())
+      return null;
+    const data = await file2.json();
+    const parsed = AuthDataSchema.safeParse(data);
+    if (!parsed.success) {
+      return { error: errors3.authSchemaError(parsed.error.message) };
+    }
+    return parsed.data;
+  } catch {
+    return null;
+  }
+}
+async function saveAuthData(data) {
+  await mkdir2(AUTH_DIR, { recursive: true });
+  await Bun.write(AUTH_FILE, JSON.stringify(data, null, 2), { mode: 384 });
+}
+async function refreshToken(refreshTokenValue, existingAuthenticatedAt) {
+  try {
+    const response = await fetch(`${WORKOS_API_URL}/authenticate`, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({
+        grant_type: "refresh_token",
+        refresh_token: refreshTokenValue,
+        client_id: WORKOS_CLIENT_ID
+      })
+    });
+    if (!response.ok) {
+      return { error: errors3.refreshFailed(response.status) };
+    }
+    const data = await response.json();
+    const parsed = AuthDataSchema.safeParse(data);
+    if (!parsed.success) {
+      return { error: errors3.refreshFailed(response.status) };
+    }
+    return {
+      ...parsed.data,
+      authenticated_at: existingAuthenticatedAt
+    };
+  } catch {
+    return null;
+  }
+}
+function toOptionalErrors(arr) {
+  return arr.length > 0 ? arr : undefined;
+}
+function notAuthenticated(authErrors) {
+  return { authenticated: false, needsLogin: true, errors: authErrors };
+}
+function authenticated(user, authErrors) {
+  return { authenticated: true, user, needsLogin: false, errors: authErrors };
+}
+async function tryRefresh(authData) {
+  const collectedErrors = [];
+  const refreshResult = await refreshToken(authData.refresh_token, authData.authenticated_at);
+  if (isErrorResult(refreshResult)) {
+    collectedErrors.push(refreshResult.error);
+    const freshResult = await loadAuthData();
+    if (isAuthError(freshResult)) {
+      collectedErrors.push(freshResult.error);
+    }
+    const freshData = isAuthError(freshResult) ? null : freshResult;
+    if (freshData?.access_token && !isTokenExpired(freshData.access_token)) {
+      return authenticated(freshData.user, toOptionalErrors(collectedErrors));
+    }
+    return notAuthenticated(collectedErrors);
+  }
+  if (!refreshResult)
+    return notAuthenticated(toOptionalErrors(collectedErrors));
+  await saveAuthData(refreshResult);
+  return authenticated(refreshResult.user, toOptionalErrors(collectedErrors));
+}
+async function checkAuthStatus(attemptRefresh = true) {
+  const collectedErrors = [];
+  const authResult = await loadAuthData();
+  if (isAuthError(authResult)) {
+    collectedErrors.push(authResult.error);
+  }
+  const authData = isAuthError(authResult) ? null : authResult;
+  if (!authData?.access_token) {
+    return notAuthenticated(toOptionalErrors(collectedErrors));
+  }
+  if (!isTokenExpired(authData.access_token)) {
+    return authenticated(authData.user, toOptionalErrors(collectedErrors));
+  }
+  if (!attemptRefresh || !authData.refresh_token) {
+    return notAuthenticated(toOptionalErrors(collectedErrors));
+  }
+  const refreshStatus = await tryRefresh(authData);
+  const allErrors = [...collectedErrors, ...refreshStatus.errors ?? []];
+  return { ...refreshStatus, errors: toOptionalErrors(allErrors) };
+}
+function getUserDisplayName(user) {
+  return user.first_name || user.email;
+}
+
+// src/lib/extraction.ts
+var HIVE_MIND_VERSION = "0.1";
+function* parseJsonl(content) {
+  for (const line of content.split(`
+`)) {
+    const trimmed = line.trim();
+    if (!trimmed)
+      continue;
+    try {
+      yield JSON.parse(trimmed);
+    } catch (error48) {
+      if (process.env.DEBUG) {
+        console.warn("Skipping malformed JSONL line:", error48);
+      }
+    }
+  }
+}
+function transformEntry(rawEntry) {
+  const result = parseKnownEntry(rawEntry);
+  if (result.error)
+    return { entry: null, error: result.error };
+  if (!result.data)
+    return { entry: null };
+  const type = result.data.type;
+  if (type === "user" || type === "assistant" || type === "summary" || type === "system") {
+    return { entry: result.data };
+  }
+  return { entry: null };
+}
+async function parseSessionForErrors(rawPath) {
+  const content = await readFile2(rawPath, "utf-8");
+  const schemaErrors = [];
+  let hasAssistant = false;
+  for (const rawEntry of parseJsonl(content)) {
+    const { entry, error: error48 } = transformEntry(rawEntry);
+    if (error48)
+      schemaErrors.push(error48);
+    if (entry?.type === "assistant")
+      hasAssistant = true;
+  }
+  return { hasContent: hasAssistant, schemaErrors };
+}
+async function extractSession(options) {
+  const { rawPath, outputPath, agentId } = options;
+  const hiveMindDir = dirname(dirname(outputPath));
+  const [content, rawStat, checkoutId, existingMetaResult] = await Promise.all([
+    readFile2(rawPath, "utf-8"),
+    stat2(rawPath),
+    getOrCreateCheckoutId(hiveMindDir),
+    readExtractedMeta(outputPath)
+  ]);
+  const existingMeta = isMetaError(existingMetaResult) ? null : existingMetaResult;
+  const t0Parse = process.env.DEBUG ? performance.now() : 0;
+  const entries = [];
+  const schemaErrors = [];
+  for (const rawEntry of parseJsonl(content)) {
+    const { entry, error: error48 } = transformEntry(rawEntry);
+    if (error48)
+      schemaErrors.push(error48);
+    if (entry)
+      entries.push(entry);
+  }
+  const rawLineCount = content.split(`
+`).filter((l) => l.trim()).length;
+  if (process.env.DEBUG) {
+    console.log(`[extract] Parsing: ${(performance.now() - t0Parse).toFixed(2)}ms for ${entries.length} entries`);
+  }
+  if (!entries.some((e) => e.type === "assistant"))
+    return null;
+  const parentSessionId = agentId ? entries.find((e) => ("sessionId" in e) && typeof e.sessionId === "string")?.sessionId : undefined;
+  const meta3 = {
+    _type: "hive-mind-meta",
+    version: HIVE_MIND_VERSION,
+    sessionId: basename2(rawPath, ".jsonl"),
+    checkoutId,
+    extractedAt: new Date().toISOString(),
+    rawMtime: rawStat.mtime.toISOString(),
+    messageCount: entries.length,
+    rawLineCount,
+    rawPath,
+    ...agentId && { agentId },
+    ...parentSessionId && { parentSessionId },
+    ...schemaErrors.length > 0 && { schemaErrors },
+    ...existingMeta?.excluded && { excluded: true },
+    ...existingMeta?.uploadedAt && { uploadedAt: existingMeta.uploadedAt }
+  };
+  resetDetectSecretsStats();
+  const t0 = performance.now();
+  const sanitizedEntries = entries.map((e) => sanitizeDeep(e));
+  if (process.env.DEBUG) {
+    const stats = getDetectSecretsStats();
+    console.log(`[extract] Sanitization: ${(performance.now() - t0).toFixed(2)}ms | ` + `${stats.calls} calls, ${stats.keywordHits} keyword hits, ${stats.regexRuns} regex runs`);
+  }
+  await mkdir3(dirname(outputPath), { recursive: true });
+  const lines = [JSON.stringify(meta3), ...sanitizedEntries.map((e) => JSON.stringify(e))];
+  await writeFile2(outputPath, `${lines.join(`
+`)}
+`);
+  return { messageCount: entries.length, schemaErrors };
+}
+async function readFirstLine(filePath) {
+  const stream = createReadStream(filePath, { encoding: "utf-8" });
+  const rl = createInterface({ input: stream, crlfDelay: Infinity });
+  try {
+    for await (const line of rl) {
+      stream.destroy();
+      return line;
+    }
+    return null;
+  } finally {
+    rl.close();
+  }
+}
+async function readExtractedMeta(extractedPath) {
+  try {
+    const firstLine = await readFirstLine(extractedPath);
+    if (!firstLine)
+      return null;
+    const parsed = HiveMindMetaSchema.safeParse(JSON.parse(firstLine));
+    if (!parsed.success) {
+      return { error: errors3.schemaError(extractedPath, parsed.error.message) };
+    }
+    return parsed.data;
+  } catch {
+    return null;
+  }
+}
+var isMetaError = isErrorResult;
+async function readExtractedSession(extractedPath) {
+  try {
+    const content = await readFile2(extractedPath, "utf-8");
+    const lines = content.split(`
+`).filter((l) => l.trim());
+    if (lines.length === 0)
+      return null;
+    const metaParsed = HiveMindMetaSchema.safeParse(JSON.parse(lines[0]));
+    if (!metaParsed.success) {
+      return { error: errors3.schemaError(extractedPath, metaParsed.error.message) };
+    }
+    const entries = [];
+    for (let i = 1;i < lines.length; i++) {
+      const result = parseKnownEntry(JSON.parse(lines[i]));
+      if (result.data)
+        entries.push(result.data);
+    }
+    return { meta: metaParsed.data, entries };
+  } catch {
+    return null;
+  }
+}
+var isSessionError = isErrorResult;
+async function markSessionUploaded(sessionPath) {
+  try {
+    const content = await readFile2(sessionPath, "utf-8");
+    const newlineIndex = content.indexOf(`
+`);
+    if (newlineIndex === -1)
+      return { success: false };
+    const firstLine = content.slice(0, newlineIndex);
+    const parsed = HiveMindMetaSchema.safeParse(JSON.parse(firstLine));
+    if (!parsed.success) {
+      return { success: false, error: errors3.schemaError(sessionPath, parsed.error.message) };
+    }
+    const meta3 = { ...parsed.data, uploadedAt: new Date().toISOString() };
+    const newContent = JSON.stringify(meta3) + content.slice(newlineIndex);
+    await writeFile2(sessionPath, newContent);
+    return { success: true };
+  } catch (err) {
+    return { success: false, error: errors3.markUploadedFailed(err instanceof Error ? err.message : String(err)) };
+  }
+}
+function getHiveMindSessionsDir(projectCwd) {
+  return join2(projectCwd, ".claude", "hive-mind", "sessions");
+}
+async function countRawLines(filePath) {
+  const stream = createReadStream(filePath, { encoding: "utf-8" });
+  const rl = createInterface({ input: stream, crlfDelay: Infinity });
+  let count = 0;
+  for await (const line of rl) {
+    if (line.trim())
+      count++;
+  }
+  return count;
+}
+async function findRawSessions(rawDir) {
+  const files = await readdir(rawDir);
+  const sessions = [];
+  for (const f of files) {
+    if (f.endsWith(".jsonl")) {
+      if (f.startsWith("agent-")) {
+        sessions.push({ path: join2(rawDir, f), agentId: f.replace("agent-", "").replace(".jsonl", "") });
+      } else {
+        sessions.push({ path: join2(rawDir, f) });
+      }
+      continue;
+    }
+    const subagentsDir = join2(rawDir, f, "subagents");
+    try {
+      const subagentFiles = await readdir(subagentsDir);
+      for (const sf of subagentFiles) {
+        if (sf.endsWith(".jsonl") && sf.startsWith("agent-")) {
+          sessions.push({
+            path: join2(subagentsDir, sf),
+            agentId: sf.replace("agent-", "").replace(".jsonl", "")
+          });
+        }
+      }
+    } catch {}
+  }
+  return sessions;
+}
+var verbose = () => process.env.HIVE_MIND_VERBOSE === "1";
+async function checkAllSessions(cwd, transcriptsDirs) {
+  const extractedDir = getHiveMindSessionsDir(cwd);
+  const collectedErrors = [];
+  const t0 = performance.now();
+  const [rawSessionArrays, extractedResult] = await Promise.all([
+    Promise.all(transcriptsDirs.map(async (dir) => {
+      try {
+        return await findRawSessions(dir);
+      } catch (err) {
+        collectedErrors.push(errors3.readTranscriptsDirFailed(dir, err instanceof Error ? err.message : String(err)));
+        return [];
+      }
+    })),
+    loadExtractedMetadata(extractedDir)
+  ]);
+  const tAfterLoad = performance.now();
+  const { metaMap: extractedMetaMap, errors: metadataErrors } = extractedResult;
+  collectedErrors.push(...metadataErrors);
+  const rawSessionMap = new Map;
+  for (const sessions of rawSessionArrays) {
+    for (const session of sessions) {
+      const sessionId = basename2(session.path, ".jsonl");
+      rawSessionMap.set(sessionId, session);
+    }
+  }
+  const rawSessions = [...rawSessionMap.values()];
+  const sessionsToExtract = [];
+  const schemaErrors = [];
+  let parseCount = 0;
+  await Promise.all(rawSessions.map(async (session) => {
+    const { path: rawPath, agentId } = session;
+    const sessionId = basename2(rawPath, ".jsonl");
+    const existingMeta = extractedMetaMap.get(sessionId);
+    let needsExtract = false;
+    if (!existingMeta) {
+      needsExtract = true;
+    } else {
+      try {
+        const rawStat = await stat2(rawPath);
+        const storedMtime = new Date(existingMeta.rawMtime).getTime();
+        if (rawStat.mtime.getTime() > storedMtime) {
+          if (existingMeta.rawLineCount != null) {
+            const currentLineCount = await countRawLines(rawPath);
+            needsExtract = currentLineCount !== existingMeta.rawLineCount;
+          } else {
+            needsExtract = true;
+          }
+        }
+      } catch (err) {
+        collectedErrors.push(errors3.statFailed(rawPath, err instanceof Error ? err.message : String(err)));
+        needsExtract = true;
+      }
+    }
+    if (needsExtract) {
+      parseCount++;
+      try {
+        const parseResult = await parseSessionForErrors(rawPath);
+        if (parseResult.schemaErrors.length > 0) {
+          schemaErrors.push({ sessionId, errors: parseResult.schemaErrors });
+        }
+        if (parseResult.hasContent) {
+          sessionsToExtract.push({ sessionId, rawPath, agentId });
+        }
+      } catch (err) {
+        collectedErrors.push(errors3.parseSessionFailed(sessionId, err instanceof Error ? err.message : String(err)));
+        sessionsToExtract.push({ sessionId, rawPath, agentId });
+      }
+    }
+  }));
+  const tEnd = performance.now();
+  if (verbose()) {
+    console.error(`[session-start] checkAllSessions: ${(tEnd - t0).toFixed(0)}ms total | ` + `findRaw+loadMeta: ${(tAfterLoad - t0).toFixed(0)}ms | ` + `statCheck+parse: ${(tEnd - tAfterLoad).toFixed(0)}ms | ` + `raw=${rawSessions.length} extracted=${extractedMetaMap.size} needsParse=${parseCount}`);
+  }
+  const extractedSessions = [...extractedMetaMap.entries()].map(([sessionId, meta3]) => ({
+    sessionId,
+    meta: meta3
+  }));
+  return { sessionsToExtract, schemaErrors, extractedSessions, errors: collectedErrors };
+}
+async function loadExtractedMetadata(extractedDir) {
+  const t0 = performance.now();
+  const metaMap = new Map;
+  const collectedErrors = [];
+  let files;
+  try {
+    files = await readdir(extractedDir);
+  } catch {
+    return { metaMap, errors: collectedErrors };
+  }
+  const jsonlFiles = files.filter((f) => f.endsWith(".jsonl"));
+  const tAfterReaddir = performance.now();
+  await Promise.all(jsonlFiles.map(async (file2) => {
+    const result = await readExtractedMeta(join2(extractedDir, file2));
+    if (isMetaError(result)) {
+      collectedErrors.push(result.error);
+    } else if (result) {
+      metaMap.set(result.sessionId, result);
+    }
+  }));
+  if (verbose()) {
+    console.error(`[session-start]   loadExtractedMetadata: ${(performance.now() - t0).toFixed(0)}ms | ` + `readdir: ${(tAfterReaddir - t0).toFixed(0)}ms | ` + `readMeta: ${(performance.now() - tAfterReaddir).toFixed(0)}ms | ` + `files=${jsonlFiles.length}`);
+  }
+  return { metaMap, errors: collectedErrors };
+}
+async function extractSingleSession(cwd, sessionId) {
+  const extractedDir = getHiveMindSessionsDir(cwd);
+  const transcriptsDirs = await loadTranscriptsDirs(join2(cwd, ".claude", "hive-mind"));
+  if (transcriptsDirs.length === 0)
+    return false;
+  for (const transcriptsDir of transcriptsDirs) {
+    try {
+      const rawSessions = await findRawSessions(transcriptsDir);
+      const session = rawSessions.find((s) => basename2(s.path, ".jsonl") === sessionId);
+      if (session) {
+        const extractedPath = join2(extractedDir, basename2(session.path));
+        const result = await extractSession({
+          rawPath: session.path,
+          outputPath: extractedPath,
+          agentId: session.agentId
+        });
+        return result !== null;
+      }
+    } catch {
+      continue;
+    }
+  }
+  return false;
+}
+
+// src/lib/output.ts
+var colors = {
+  red: (s) => `\x1B[31m${s}\x1B[0m`,
+  green: (s) => `\x1B[32m${s}\x1B[0m`,
+  yellow: (s) => `\x1B[33m${s}\x1B[0m`,
+  blue: (s) => `\x1B[34m${s}\x1B[0m`
+};
+function hookOutput(message) {
+  console.log(JSON.stringify({ systemMessage: message }));
+}
+function printError(message) {
+  console.error(`${colors.red("Error:")} ${message}`);
+}
+function printSuccess(message) {
+  console.log(colors.green(message));
+}
+function printInfo(message) {
+  console.log(colors.blue(message));
+}
+function printWarning(message) {
+  console.log(colors.yellow(message));
+}
+
+// src/lib/utils.ts
+import { createInterface as createInterface2 } from "readline";
+import { readdir as readdir2 } from "fs/promises";
+import { join as join3 } from "path";
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+function confirm(message) {
+  const rl = createInterface2({ input: process.stdin, output: process.stdout });
+  return new Promise((resolve) => {
+    rl.question(`${message} [y/N] `, (answer) => {
+      rl.close();
+      resolve(answer.toLowerCase() === "y");
+    });
+  });
+}
+function formatSessionId(id) {
+  return id.length > 12 ? `${id.slice(0, 8)}...${id.slice(-4)}` : id;
+}
+async function lookupSession(cwd, sessionIdPrefix) {
+  const sessionsDir = getHiveMindSessionsDir(cwd);
+  const exactPath = join3(sessionsDir, `${sessionIdPrefix}.jsonl`);
+  const exactMetaResult = await readExtractedMeta(exactPath);
+  if (exactMetaResult && !isMetaError(exactMetaResult)) {
+    return { type: "found", sessionId: sessionIdPrefix, sessionPath: exactPath, meta: exactMetaResult };
+  }
+  let files;
+  try {
+    files = await readdir2(sessionsDir);
+  } catch {
+    return { type: "not_found" };
+  }
+  const matches = files.filter((f) => f.endsWith(".jsonl") && f.startsWith(sessionIdPrefix));
+  if (matches.length === 0) {
+    return { type: "not_found" };
+  }
+  if (matches.length > 1) {
+    return { type: "ambiguous", matches: matches.map((m) => m.replace(".jsonl", "")) };
+  }
+  const sessionId = matches[0].replace(".jsonl", "");
+  const sessionPath = join3(sessionsDir, matches[0]);
+  const metaResult = await readExtractedMeta(sessionPath);
+  if (!metaResult || isMetaError(metaResult)) {
+    return { type: "not_found" };
+  }
+  return { type: "found", sessionId, sessionPath, meta: metaResult };
+}
+
+// src/commands/exclude.ts
+async function excludeSession(sessionPath) {
+  try {
+    const content = await readFile3(sessionPath, "utf-8");
+    const lines = content.split(`
+`);
+    if (lines.length === 0)
+      return false;
+    const meta3 = JSON.parse(lines[0]);
+    meta3.excluded = true;
+    lines[0] = JSON.stringify(meta3);
+    await writeFile3(sessionPath, lines.join(`
+`));
+    return true;
+  } catch {
+    return false;
+  }
+}
+async function excludeAll(cwd) {
+  const sessionsDir = getHiveMindSessionsDir(cwd);
+  let files;
+  try {
+    files = await readdir3(sessionsDir);
+  } catch {
+    printError(excludeCmd.noSessionsDir);
+    return 1;
+  }
+  const sessionFiles = files.filter((f) => f.endsWith(".jsonl"));
+  if (sessionFiles.length === 0) {
+    console.log(excludeCmd.noSessions);
+    return 0;
+  }
+  let nonExcludedCount = 0;
+  for (const file2 of sessionFiles) {
+    const metaResult = await readExtractedMeta(join4(sessionsDir, file2));
+    if (metaResult && !isMetaError(metaResult) && !metaResult.excluded && !metaResult.agentId) {
+      nonExcludedCount++;
+    }
+  }
+  if (nonExcludedCount === 0) {
+    console.log(excludeCmd.allAlreadyExcluded);
+    return 0;
+  }
+  console.log(excludeCmd.foundNonExcluded(nonExcludedCount));
+  console.log("");
+  if (!await confirm(excludeCmd.confirmExcludeAll)) {
+    console.log(excludeCmd.cancelled);
+    return 0;
+  }
+  let succeeded = 0;
+  let failed = 0;
+  for (const file2 of sessionFiles) {
+    const sessionPath = join4(sessionsDir, file2);
+    const metaResult = await readExtractedMeta(sessionPath);
+    if (!metaResult || isMetaError(metaResult) || metaResult.excluded || metaResult.agentId)
+      continue;
+    const sessionId = file2.replace(".jsonl", "");
+    if (await excludeSession(sessionPath)) {
+      console.log(colors.yellow(excludeCmd.excludedLine(formatSessionId(sessionId))));
+      succeeded++;
+    } else {
+      console.log(colors.red(excludeCmd.failedLine(formatSessionId(sessionId))));
+      failed++;
+    }
+  }
+  console.log("");
+  if (succeeded > 0) {
+    printSuccess(excludeCmd.excludedCount(succeeded));
+  }
+  if (failed > 0) {
+    printError(excludeCmd.failedCount(failed));
+  }
+  return failed > 0 ? 1 : 0;
+}
+async function excludeOne(cwd, sessionIdPrefix) {
+  const lookup = await lookupSession(cwd, sessionIdPrefix);
+  if (lookup.type === "not_found") {
+    printError(excludeCmd.sessionNotFound(sessionIdPrefix));
+    return 1;
+  }
+  if (lookup.type === "ambiguous") {
+    printError(excludeCmd.ambiguousSession(sessionIdPrefix, lookup.matches.length));
+    console.log(excludeCmd.matches);
+    for (const m of lookup.matches) {
+      console.log(`  ${m}`);
+    }
+    return 1;
+  }
+  const { sessionPath, meta: meta3 } = lookup;
+  if (meta3.agentId) {
+    printError(excludeCmd.cannotExcludeAgent);
+    return 1;
+  }
+  if (meta3.excluded) {
+    printInfo(excludeCmd.alreadyExcluded(formatSessionId(meta3.sessionId)));
+    return 0;
+  }
+  if (await excludeSession(sessionPath)) {
+    printSuccess(excludeCmd.excluded(formatSessionId(meta3.sessionId)));
+    return 0;
+  }
+  printError(excludeCmd.failedToExclude(formatSessionId(meta3.sessionId)));
+  return 1;
+}
+async function exclude() {
+  const cwd = process.env.CWD || process.cwd();
+  const args = process.argv.slice(3);
+  if (args.includes("--all")) {
+    return await excludeAll(cwd);
+  }
+  const sessionId = args.find((a) => !a.startsWith("-"));
+  if (!sessionId) {
+    printError(excludeCmd.usage);
+    return 1;
+  }
+  return await excludeOne(cwd, sessionId);
+}
+
+// src/commands/extract.ts
+async function extract() {
+  const cwd = process.env.CWD || process.cwd();
+  const sessionIds = process.argv.slice(3);
+  if (sessionIds.length === 0) {
+    return 1;
+  }
+  let failures = 0;
+  for (const sessionId of sessionIds) {
+    try {
+      const success2 = await extractSingleSession(cwd, sessionId);
+      if (!success2)
+        failures++;
+    } catch (error48) {
+      if (process.env.DEBUG) {
+        console.error(`[extract] ${error48 instanceof Error ? error48.message : String(error48)}`);
+      }
+      failures++;
+    }
+  }
+  return failures > 0 ? 1 : 0;
+}
+
+// src/commands/search.ts
+import { readdir as readdir4 } from "fs/promises";
+import { join as join5 } from "path";
+
+// src/lib/field-filter.ts
+function parseFieldList(input) {
+  return input.split(",").map((s) => s.trim()).filter((s) => s.length > 0);
+}
+function matches(pattern, target) {
+  if (pattern === target)
+    return true;
+  if (target.startsWith(pattern + ":"))
+    return true;
+  if (pattern === "tool:result") {
+    return target.endsWith(":result") && target.startsWith("tool:");
+  }
+  if (pattern === "tool:input") {
+    return target.endsWith(":input") && target.startsWith("tool:");
+  }
+  return false;
+}
+function specificity(field) {
+  return field.split(":").length;
+}
+var READ_DEFAULT_SHOWN = new Set(["user", "assistant", "thinking", "tool", "system", "summary"]);
+var SEARCH_DEFAULT_FIELDS = new Set(["user", "assistant", "thinking", "tool:input", "system", "summary"]);
+
+class ReadFieldFilter {
+  rules;
+  constructor(show, hide) {
+    this.rules = [];
+    for (const field of show) {
+      this.rules.push({ field, action: "show", specificity: specificity(field) });
+    }
+    for (const field of hide) {
+      this.rules.push({ field, action: "hide", specificity: specificity(field) });
+    }
+    this.rules.sort((a, b) => {
+      if (b.specificity !== a.specificity)
+        return b.specificity - a.specificity;
+      if (a.action === "hide" && b.action !== "hide")
+        return -1;
+      if (b.action === "hide" && a.action !== "hide")
+        return 1;
+      return 0;
+    });
+  }
+  shouldShow(field) {
+    for (const rule of this.rules) {
+      if (matches(rule.field, field)) {
+        return rule.action === "show";
+      }
+    }
+    return this.isDefaultShown(field);
+  }
+  showFullThinking() {
+    return this.rules.some((r) => r.field === "thinking" && r.action === "show");
+  }
+  isDefaultShown(field) {
+    for (const def of READ_DEFAULT_SHOWN) {
+      if (matches(def, field))
+        return true;
+    }
+    return false;
+  }
+}
+
+class SearchFieldFilter {
+  searchFields;
+  constructor(searchIn) {
+    if (searchIn === null || searchIn.length === 0) {
+      this.searchFields = new Set(SEARCH_DEFAULT_FIELDS);
+    } else {
+      this.searchFields = new Set(searchIn);
+    }
+  }
+  isSearchable(field) {
+    for (const searchField of this.searchFields) {
+      if (matches(searchField, field) || matches(field, searchField)) {
+        return true;
+      }
+    }
+    return false;
+  }
+}
+
+// src/lib/truncation.ts
+var MIN_WORD_LIMIT = 6;
+function countWords(text) {
+  if (!text)
+    return 0;
+  return text.split(/\s+/).filter((w) => w.length > 0).length;
+}
+function truncateWords(text, skip, limit) {
+  const wordPattern = /\S+/g;
+  const matches2 = [];
+  let match;
+  while ((match = wordPattern.exec(text)) !== null) {
+    matches2.push({ word: match[0], start: match.index, end: match.index + match[0].length });
+  }
+  const totalWords = matches2.length;
+  if (skip >= totalWords) {
+    return { text: "", wordCount: 0, remaining: 0, truncated: false };
+  }
+  const afterSkipCount = totalWords - skip;
+  const startIdx = skip;
+  const endIdx = Math.min(skip + limit, totalWords);
+  const wordsToInclude = endIdx - startIdx;
+  if (wordsToInclude === 0) {
+    return { text: "", wordCount: 0, remaining: 0, truncated: false };
+  }
+  const startPos = matches2[startIdx].start;
+  const endPos = matches2[endIdx - 1].end;
+  const extracted = text.slice(startPos, endPos);
+  const remaining = afterSkipCount - wordsToInclude;
+  return {
+    text: extracted,
+    wordCount: wordsToInclude,
+    remaining,
+    truncated: remaining > 0
+  };
+}
+function computeUniformLimit(wordCounts, targetTotal) {
+  if (wordCounts.length === 0)
+    return null;
+  const total = wordCounts.reduce((a, b) => a + b, 0);
+  if (total <= targetTotal)
+    return null;
+  const sorted = [...wordCounts].sort((a, b) => a - b);
+  const n = sorted.length;
+  let prefixSum = 0;
+  for (let k = 0;k < n; k++) {
+    const remaining = n - k;
+    const L = (targetTotal - prefixSum) / remaining;
+    if (L <= sorted[k]) {
+      return Math.max(MIN_WORD_LIMIT, Math.floor(L));
+    }
+    prefixSum += sorted[k];
+  }
+  return Math.max(MIN_WORD_LIMIT, Math.floor(targetTotal / n));
+}
+
+// src/lib/format.ts
 var MAX_CONTENT_SUMMARY_LEN = 300;
 var DEFAULT_TARGET_WORDS = 2000;
 function escapeQuotes(str) {
@@ -17595,7 +17593,7 @@ function formatGenericTool({ input, redact, truncation }) {
   return { headerParams, multilineParams };
 }
 
-// cli/lib/time-filter.ts
+// src/lib/time-filter.ts
 function parseRelativeTime(value) {
   const match = value.match(/^(\d+)([mhdw])$/);
   if (!match)
@@ -17642,7 +17640,7 @@ function isInTimeRange(timestamp, range) {
   return true;
 }
 
-// cli/commands/search.ts
+// src/commands/search.ts
 var DEFAULT_CONTEXT_WORDS = 10;
 function printUsage() {
   console.log(usage.search());
@@ -17721,12 +17719,12 @@ async function search() {
   try {
     files = await readdir4(sessionsDir);
   } catch {
-    printError(errors.noSessions);
+    printError(errors3.noSessions);
     return 1;
   }
   let jsonlFiles = files.filter((f) => f.endsWith(".jsonl"));
   if (jsonlFiles.length === 0) {
-    printError(errors.noSessionsIn(sessionsDir));
+    printError(errors3.noSessionsIn(sessionsDir));
     return 1;
   }
   if (options.sessionFilter) {
@@ -17736,7 +17734,7 @@ async function search() {
       return name.startsWith(prefix) || name === `agent-${prefix}`;
     });
     if (jsonlFiles.length === 0) {
-      printError(errors.sessionNotFound(prefix));
+      printError(errors3.sessionNotFound(prefix));
       return 1;
     }
   }
@@ -17836,7 +17834,7 @@ function parseSearchOptions(args) {
   if (mValue !== undefined) {
     maxMatches = parseInt(mValue, 10);
     if (isNaN(maxMatches) || maxMatches < 1) {
-      printError(errors.invalidNumber("-m", mValue));
+      printError(errors3.invalidNumber("-m", mValue));
       return null;
     }
   }
@@ -17845,7 +17843,7 @@ function parseSearchOptions(args) {
   if (cValue !== undefined) {
     contextWords = parseInt(cValue, 10);
     if (isNaN(contextWords) || contextWords < 0) {
-      printError(errors.invalidNonNegative("-C"));
+      printError(errors3.invalidNonNegative("-C"));
       return null;
     }
   }
@@ -17858,7 +17856,7 @@ function parseSearchOptions(args) {
   if (afterValue !== undefined) {
     afterTime = parseTimeSpec(afterValue);
     if (!afterTime) {
-      printError(errors.invalidTimeSpec("--after", afterValue));
+      printError(errors3.invalidTimeSpec("--after", afterValue));
       return null;
     }
   }
@@ -17867,7 +17865,7 @@ function parseSearchOptions(args) {
   if (beforeValue !== undefined) {
     beforeTime = parseTimeSpec(beforeValue);
     if (!beforeTime) {
-      printError(errors.invalidTimeSpec("--before", beforeValue));
+      printError(errors3.invalidTimeSpec("--before", beforeValue));
       return null;
     }
   }
@@ -17885,14 +17883,14 @@ function parseSearchOptions(args) {
     break;
   }
   if (!patternStr) {
-    printError(errors.noPattern);
+    printError(errors3.noPattern);
     return null;
   }
   let pattern;
   try {
     pattern = new RegExp(patternStr, caseInsensitive ? "i" : "");
   } catch (e) {
-    printError(errors.invalidRegex(e instanceof Error ? e.message : String(e)));
+    printError(errors3.invalidRegex(e instanceof Error ? e.message : String(e)));
     return null;
   }
   return {
@@ -17908,12 +17906,12 @@ function parseSearchOptions(args) {
   };
 }
 
-// cli/commands/index.ts
+// src/commands/index.ts
 import { readdir as readdir5 } from "fs/promises";
 import { homedir as homedir2 } from "os";
 import { join as join6 } from "path";
 
-// cli/lib/upload-eligibility.ts
+// src/lib/upload-eligibility.ts
 var SESSION_REVIEW_PERIOD_MS = 24 * 60 * 60 * 1000;
 var AUTH_REVIEW_PERIOD_MS = 4 * 60 * 60 * 1000;
 async function getAuthIssuedAt() {
@@ -17976,7 +17974,7 @@ function checkSessionEligibility(meta3, authIssuedAt) {
   };
 }
 
-// cli/commands/index.ts
+// src/commands/index.ts
 var MONTH_NAMES = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 function computeMinimalPrefixes2(ids) {
   const result = new Map;
@@ -18529,7 +18527,7 @@ function getToolResultText(content) {
 `);
 }
 
-// cli/commands/read.ts
+// src/commands/read.ts
 import { readdir as readdir6 } from "fs/promises";
 import { join as join7 } from "path";
 function printUsage3() {
@@ -18590,7 +18588,7 @@ async function read() {
   try {
     files = await readdir6(sessionsDir);
   } catch {
-    printError(errors.noSessions);
+    printError(errors3.noSessions);
     return 1;
   }
   const jsonlFiles = files.filter((f) => f.endsWith(".jsonl"));
@@ -18599,16 +18597,16 @@ async function read() {
     return name.startsWith(sessionIdPrefix) || name === `agent-${sessionIdPrefix}`;
   });
   if (matches2.length === 0) {
-    printError(errors.sessionNotFound(sessionIdPrefix));
+    printError(errors3.sessionNotFound(sessionIdPrefix));
     return 1;
   }
   if (matches2.length > 1) {
-    printError(errors.multipleSessions(sessionIdPrefix));
+    printError(errors3.multipleSessions(sessionIdPrefix));
     for (const m of matches2.slice(0, 5)) {
       console.log(`  ${m.replace(".jsonl", "")}`);
     }
     if (matches2.length > 5) {
-      console.log(errors.andMore(matches2.length - 5));
+      console.log(errors3.andMore(matches2.length - 5));
     }
     return 1;
   }
@@ -18622,13 +18620,13 @@ async function read() {
       rangeStart = parseInt(rangeMatch[1], 10);
       rangeEnd = parseInt(rangeMatch[2], 10);
       if (rangeStart < 1 || rangeEnd < 1 || rangeStart > rangeEnd) {
-        printError(errors.invalidRange(entryArg));
+        printError(errors3.invalidRange(entryArg));
         return 1;
       }
     } else {
       entryNumber = parseInt(entryArg, 10);
       if (isNaN(entryNumber) || entryNumber < 1) {
-        printError(errors.invalidEntry(entryArg));
+        printError(errors3.invalidEntry(entryArg));
         return 1;
       }
     }
@@ -18638,12 +18636,12 @@ async function read() {
     if (isSessionError(sessionResult)) {
       printError(sessionResult.error);
     } else {
-      printError(errors.emptySession);
+      printError(errors3.emptySession);
     }
     return 1;
   }
   if (sessionResult.entries.length === 0) {
-    printError(errors.emptySession);
+    printError(errors3.emptySession);
     return 1;
   }
   const { meta: meta3, entries } = sessionResult;
@@ -18664,7 +18662,7 @@ async function read() {
   if (rangeStart !== null && rangeEnd !== null) {
     const rangeBlocks = blocks.filter((b) => b.lineNumber >= rangeStart && b.lineNumber <= rangeEnd);
     if (rangeBlocks.length === 0) {
-      printError(errors.rangeNotFound(rangeStart, rangeEnd, maxLine));
+      printError(errors3.rangeNotFound(rangeStart, rangeEnd, maxLine));
       return 1;
     }
     const output = formatBlocks(rangeBlocks, {
@@ -18678,7 +18676,7 @@ async function read() {
   } else if (entryNumber !== null) {
     const entryBlocks = blocks.filter((b) => b.lineNumber === entryNumber);
     if (entryBlocks.length === 0) {
-      printError(errors.entryNotFound(entryNumber, maxLine));
+      printError(errors3.entryNotFound(entryNumber, maxLine));
       return 1;
     }
     const output = formatBlocks(entryBlocks, {
@@ -18691,14 +18689,14 @@ async function read() {
   return 0;
 }
 
-// cli/commands/session-start.ts
+// src/commands/session-start.ts
 import { closeSync, existsSync, openSync } from "fs";
 import { readFile as readFile5 } from "fs/promises";
 import { dirname as dirname2, join as join8 } from "path";
 import { homedir as homedir4 } from "os";
 import { spawn } from "child_process";
 
-// cli/lib/alias.ts
+// src/lib/alias.ts
 import { homedir as homedir3 } from "os";
 import { readFile as readFile4, writeFile as writeFile4 } from "fs/promises";
 var ALIAS_NAME = "hive-mind";
@@ -18783,10 +18781,10 @@ async function updateAliasIfOutdated() {
   return { updated: success2, hasAlias: true, sourceCmd };
 }
 
-// ../node_modules/convex/dist/esm/index.js
+// ../../node_modules/convex/dist/esm/index.js
 var version2 = "1.31.4";
 
-// ../node_modules/convex/dist/esm/values/base64.js
+// ../../node_modules/convex/dist/esm/values/base64.js
 var lookup = [];
 var revLookup = [];
 var Arr = Uint8Array;
@@ -18870,7 +18868,7 @@ function fromByteArray(uint8) {
   return parts.join("");
 }
 
-// ../node_modules/convex/dist/esm/common/index.js
+// ../../node_modules/convex/dist/esm/common/index.js
 function parseArgs(args) {
   if (args === undefined) {
     return {};
@@ -18906,7 +18904,7 @@ function isSimpleObject(value) {
   return isObject2 && isSimple;
 }
 
-// ../node_modules/convex/dist/esm/values/value.js
+// ../../node_modules/convex/dist/esm/values/value.js
 var LITTLE_ENDIAN = true;
 var MIN_INT64 = BigInt("-9223372036854775808");
 var MAX_INT64 = BigInt("9223372036854775807");
@@ -19145,7 +19143,7 @@ function convexOrUndefinedToJsonInternal(value, originalValue, context) {
 function convexToJson(value) {
   return convexToJsonInternal(value, value, "", false);
 }
-// ../node_modules/convex/dist/esm/values/errors.js
+// ../../node_modules/convex/dist/esm/values/errors.js
 var __defProp2 = Object.defineProperty;
 var __defNormalProp = (obj, key, value) => (key in obj) ? __defProp2(obj, key, { enumerable: true, configurable: true, writable: true, value }) : obj[key] = value;
 var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "symbol" ? key + "" : key, value);
@@ -19162,7 +19160,7 @@ class ConvexError extends (_b = Error, _a2 = IDENTIFYING_FIELD, _b) {
     this.data = data;
   }
 }
-// ../node_modules/convex/dist/esm/browser/logging.js
+// ../../node_modules/convex/dist/esm/browser/logging.js
 var __defProp3 = Object.defineProperty;
 var __defNormalProp2 = (obj, key, value) => (key in obj) ? __defProp3(obj, key, { enumerable: true, configurable: true, writable: true, value }) : obj[key] = value;
 var __publicField2 = (obj, key, value) => __defNormalProp2(obj, typeof key !== "symbol" ? key + "" : key, value);
@@ -19268,10 +19266,10 @@ function logForFunction(logger, type, source, udfPath, message) {
   }
 }
 
-// ../node_modules/convex/dist/esm/server/functionName.js
+// ../../node_modules/convex/dist/esm/server/functionName.js
 var functionName = Symbol.for("functionName");
 
-// ../node_modules/convex/dist/esm/server/components/paths.js
+// ../../node_modules/convex/dist/esm/server/components/paths.js
 var toReferencePath = Symbol.for("toReferencePath");
 function extractReferencePath(reference) {
   return reference[toReferencePath] ?? null;
@@ -19299,7 +19297,7 @@ function getFunctionAddress(functionReference) {
   return functionAddress;
 }
 
-// ../node_modules/convex/dist/esm/server/api.js
+// ../../node_modules/convex/dist/esm/server/api.js
 function getFunctionName(functionReference) {
   const address = getFunctionAddress(functionReference);
   if (address.name === undefined) {
@@ -19347,7 +19345,7 @@ function createApi(pathParts = []) {
 }
 var anyApi = createApi();
 
-// ../node_modules/convex/dist/esm/browser/http_client.js
+// ../../node_modules/convex/dist/esm/browser/http_client.js
 var __defProp4 = Object.defineProperty;
 var __defNormalProp3 = (obj, key, value) => (key in obj) ? __defProp4(obj, key, { enumerable: true, configurable: true, writable: true, value }) : obj[key] = value;
 var __publicField3 = (obj, key, value) => __defNormalProp3(obj, typeof key !== "symbol" ? key + "" : key, value);
@@ -19664,7 +19662,7 @@ function forwardErrorData(errorData, error48) {
   error48.data = jsonToConvex(errorData);
   return error48;
 }
-// ../node_modules/convex/dist/esm/server/components/index.js
+// ../../node_modules/convex/dist/esm/server/components/index.js
 function createChildComponents(root, pathParts) {
   const handler = {
     get(_, prop) {
@@ -19689,7 +19687,7 @@ var componentsGeneric = () => createChildComponents("components", []);
 var api2 = anyApi;
 var components = componentsGeneric();
 
-// cli/lib/convex.ts
+// src/lib/convex.ts
 var CONVEX_URL = process.env.CONVEX_URL ?? "https://grateful-warbler-176.convex.cloud";
 function debugLog(message) {
   if (process.env.DEBUG) {
@@ -19745,14 +19743,15 @@ async function generateUploadUrl(sessionId) {
     return null;
   }
 }
-async function saveUpload(sessionId, storageId) {
+async function saveUpload(sessionId, storageId, summary) {
   try {
     const client = await getAuthenticatedClient();
     if (!client)
       return false;
     await client.mutation(api2.sessions.saveUpload, {
       sessionId,
-      storageId
+      storageId,
+      summary
     });
     return true;
   } catch (error48) {
@@ -19761,7 +19760,7 @@ async function saveUpload(sessionId, storageId) {
   }
 }
 
-// cli/commands/session-start.ts
+// src/commands/session-start.ts
 async function readStdin() {
   if (process.stdin.isTTY)
     return null;
@@ -19875,7 +19874,7 @@ async function sessionStart() {
       }
       userHasAlias = aliasResult.hasAlias;
     } catch (err) {
-      collectedErrors.push(errors.aliasUpdateFailed(err instanceof Error ? err.message : String(err)));
+      collectedErrors.push(errors3.aliasUpdateFailed(err instanceof Error ? err.message : String(err)));
     }
   }
   if (status.needsLogin) {
@@ -19911,7 +19910,7 @@ async function sessionStart() {
         messages.push(hook.toReview(userHasAlias));
       }
     } catch (err) {
-      collectedErrors.push(errors.eligibilityCheckFailed(err instanceof Error ? err.message : String(err)));
+      collectedErrors.push(errors3.eligibilityCheckFailed(err instanceof Error ? err.message : String(err)));
     }
   }
   if (collectedErrors.length > 0) {
@@ -19999,7 +19998,7 @@ function scheduleAutoUploads(cwd, sessionIds) {
   return spawnBackground(["upload", "--pid-file", pidPath, "--delay", String(delaySeconds), ...sessionIds]);
 }
 
-// cli/commands/login.ts
+// src/commands/login.ts
 import { createInterface as createInterface3 } from "readline";
 var WORKOS_API_URL2 = "https://api.workos.com/user_management";
 var DeviceAuthResponseSchema = exports_external.object({
@@ -20153,9 +20152,9 @@ async function showStatus() {
   const status = await checkAuthStatus(false);
   if (status.authenticated && status.user) {
     const displayName = getUserDisplayName(status.user);
-    console.log(errors.loginStatusYes(displayName));
+    console.log(errors3.loginStatusYes(displayName));
   } else {
-    console.log(errors.loginStatusNo);
+    console.log(errors3.loginStatusNo);
   }
   return 0;
 }
@@ -20175,7 +20174,7 @@ async function login() {
   return await deviceAuthFlow();
 }
 
-// cli/commands/setup-alias.ts
+// src/commands/setup-alias.ts
 import { dirname as dirname3 } from "path";
 async function setupAliasCommand() {
   const pluginRoot = dirname3(process.argv[1]);
@@ -20193,7 +20192,7 @@ async function setupAliasCommand() {
   return 0;
 }
 
-// cli/commands/upload.ts
+// src/commands/upload.ts
 import { readFile as readFile6, unlink, writeFile as writeFile5 } from "fs/promises";
 import { join as join9 } from "path";
 async function uploadSession(cwd, sessionId) {
@@ -20205,16 +20204,17 @@ async function uploadSession(cwd, sessionId) {
   } catch {
     return { success: false, error: "Session file not found" };
   }
-  const metaResult = await readExtractedMeta(sessionPath);
-  if (!metaResult || isMetaError(metaResult)) {
-    return { success: false, error: "Could not read session metadata" };
+  const sessionResult = await readExtractedSession(sessionPath);
+  if (!sessionResult || isSessionError(sessionResult)) {
+    return { success: false, error: "Could not read session data" };
   }
+  const { meta: meta3, entries } = sessionResult;
   const heartbeatOk = await heartbeatSession({
-    sessionId: metaResult.sessionId,
-    checkoutId: metaResult.checkoutId,
+    sessionId: meta3.sessionId,
+    checkoutId: meta3.checkoutId,
     project: getCanonicalProjectName(cwd),
-    lineCount: metaResult.messageCount,
-    parentSessionId: metaResult.parentSessionId
+    lineCount: meta3.messageCount,
+    parentSessionId: meta3.parentSessionId
   });
   if (!heartbeatOk) {
     return { success: false, error: "Failed to heartbeat session" };
@@ -20236,7 +20236,8 @@ async function uploadSession(cwd, sessionId) {
     if (!result.storageId) {
       return { success: false, error: "No storage ID returned" };
     }
-    const saved = await saveUpload(sessionId, result.storageId);
+    const summary = extractSessionSummary(entries);
+    const saved = await saveUpload(sessionId, result.storageId, summary);
     if (!saved) {
       return { success: false, error: "Failed to save upload metadata" };
     }
@@ -20300,7 +20301,7 @@ async function uploadSingleSession(cwd, sessionIdPrefix) {
       console.log(`  ${m}`);
     }
     if (lookup2.matches.length > 5) {
-      console.log(errors.andMore(lookup2.matches.length - 5));
+      console.log(errors3.andMore(lookup2.matches.length - 5));
     }
     return 1;
   }
@@ -20381,8 +20382,70 @@ async function upload() {
   await cleanup();
   return failures > 0 ? 1 : 0;
 }
+var META_XML_TAGS2 = ["<command-name>", "<local-command-", "<system-reminder>"];
+function isMetaXml2(text) {
+  const trimmed = text.trim();
+  return META_XML_TAGS2.some((tag) => trimmed.startsWith(tag));
+}
+function isGarbageSummary2(summary) {
+  const trimmed = summary.trim();
+  return isMetaXml2(trimmed) || trimmed.startsWith("Caveat:");
+}
+function findSummaryEntry(entries) {
+  const uuids = new Set;
+  const summaries = [];
+  for (const entry of entries) {
+    if ("uuid" in entry && typeof entry.uuid === "string") {
+      uuids.add(entry.uuid);
+    }
+    if (entry.type === "summary") {
+      summaries.push({ summary: entry.summary, leafUuid: entry.leafUuid });
+    }
+  }
+  for (const s of summaries) {
+    if (s.leafUuid && uuids.has(s.leafUuid) && !isGarbageSummary2(s.summary)) {
+      return s.summary;
+    }
+  }
+  const lastSummary = summaries.at(-1)?.summary;
+  return lastSummary && !isGarbageSummary2(lastSummary) ? lastSummary : undefined;
+}
+function findFirstUserPrompt2(entries) {
+  for (const entry of entries) {
+    if (entry.type !== "user")
+      continue;
+    const content = entry.message.content;
+    if (!content)
+      continue;
+    let text;
+    if (typeof content === "string") {
+      text = content;
+    } else if (Array.isArray(content)) {
+      for (const block of content) {
+        if (block.type === "text" && "text" in block && typeof block.text === "string") {
+          text = block.text;
+          break;
+        }
+      }
+    }
+    if (text) {
+      const trimmed = text.trim();
+      if (isMetaXml2(trimmed))
+        continue;
+      const firstLine = trimmed.split(`
+`)[0].trim();
+      if (firstLine) {
+        return firstLine.length > 100 ? `${firstLine.slice(0, 97)}...` : firstLine;
+      }
+    }
+  }
+  return;
+}
+function extractSessionSummary(entries) {
+  return findSummaryEntry(entries) || findFirstUserPrompt2(entries);
+}
 
-// cli/commands/heartbeat.ts
+// src/commands/heartbeat.ts
 import { join as join10 } from "path";
 async function heartbeat() {
   const cwd = process.env.CWD || process.cwd();
@@ -20421,7 +20484,7 @@ async function heartbeat() {
   return failures > 0 ? 1 : 0;
 }
 
-// cli/cli.ts
+// src/cli.ts
 var COMMANDS = {
   exclude: { description: "Exclude session from upload", handler: exclude },
   extract: { description: "Extract session (internal)", handler: extract, hidden: true },
@@ -20447,7 +20510,7 @@ async function main() {
     return;
   }
   if (!(command in COMMANDS)) {
-    printError(errors.unknownCommand(command));
+    printError(errors3.unknownCommand(command));
     console.log("");
     printUsage4();
     process.exit(1);
