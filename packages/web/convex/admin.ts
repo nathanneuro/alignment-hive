@@ -18,51 +18,46 @@ export const listSessions = query({
       return { page: [], isDone: true, continueCursor: '' };
     }
 
-    // Build query - filter to top-level sessions only (no parentSessionId)
-    const sessionsQuery = ctx.db
+    // Load all known users (small table) for filtering and display
+    const allUsers = await ctx.db.query('users').collect();
+    const userMap = new Map(allUsers.map((u) => [u.workosId, u]));
+
+    // Build query with filters applied before pagination
+    let sessionsQuery = ctx.db
       .query('sessions')
-      .withIndex('by_parent_session_id', (q) => q.eq('parentSessionId', undefined))
+      .withIndex('by_parent_session_id', (q) =>
+        q.eq('parentSessionId', undefined)
+      )
       .order('desc');
+
+    if (args.excludeUserIds?.length) {
+      for (const id of args.excludeUserIds) {
+        sessionsQuery = sessionsQuery.filter((q) =>
+          q.neq(q.field('userId'), id)
+        );
+      }
+    }
+    if (args.excludeUnknownUsers) {
+      sessionsQuery = sessionsQuery.filter((q) =>
+        q.or(...allUsers.map((u) => q.eq(q.field('userId'), u.workosId)))
+      );
+    }
+    if (args.project) {
+      sessionsQuery = sessionsQuery.filter((q) =>
+        q.eq(q.field('project'), args.project)
+      );
+    }
+    if (args.hasUpload !== undefined) {
+      sessionsQuery = args.hasUpload
+        ? sessionsQuery.filter((q) => q.neq(q.field('upload'), undefined))
+        : sessionsQuery.filter((q) => q.eq(q.field('upload'), undefined));
+    }
 
     const paginatedSessions = await sessionsQuery.paginate(args.paginationOpts);
 
-    // Look up users first (needed for both display and filtering)
-    const allUserIds = [...new Set(paginatedSessions.page.map((s) => s.userId))];
-    const users = await Promise.all(
-      allUserIds.map((workosId) =>
-        ctx.db
-          .query('users')
-          .withIndex('by_workos_id', (q) => q.eq('workosId', workosId))
-          .first()
-      )
-    );
-    const userMap = new Map(
-      users.filter(Boolean).map((u) => [u!.workosId, u!])
-    );
-
-    // Apply filters post-pagination
-    const excludeSet = args.excludeUserIds
-      ? new Set(args.excludeUserIds)
-      : null;
-    let filteredPage = paginatedSessions.page;
-    if (excludeSet) {
-      filteredPage = filteredPage.filter((s) => !excludeSet.has(s.userId));
-    }
-    if (args.excludeUnknownUsers) {
-      filteredPage = filteredPage.filter((s) => userMap.has(s.userId));
-    }
-    if (args.project) {
-      filteredPage = filteredPage.filter((s) => s.project === args.project);
-    }
-    if (args.hasUpload !== undefined) {
-      filteredPage = filteredPage.filter((s) =>
-        args.hasUpload ? s.upload !== undefined : s.upload === undefined
-      );
-    }
-
     // Get child session counts for each session
     const childCounts = await Promise.all(
-      filteredPage.map(async (session) => {
+      paginatedSessions.page.map(async (session) => {
         const children = await ctx.db
           .query('sessions')
           .withIndex('by_parent_session_id', (q) =>
@@ -73,7 +68,7 @@ export const listSessions = query({
       })
     );
 
-    const sessionsWithUsers = filteredPage.map((session, i) => ({
+    const sessionsWithUsers = paginatedSessions.page.map((session, i) => ({
       ...session,
       user: userMap.get(session.userId) ?? null,
       childSessionCount: childCounts[i],
