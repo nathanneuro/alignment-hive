@@ -136,7 +136,8 @@
       "Bash(npx *)",
       "Bash(npm *)",
       "Bash(pnpm *)",
-      "Bash(yarn *)"
+      "Bash(yarn *)",
+      "Bash(git -C *)"
     ]
   },
   "enabledPlugins": {
