@@ -4,6 +4,20 @@ use super::types::{Pod, PodCreateInput};
 
 const BASE_URL: &str = "https://rest.runpod.io/v1";
 
+#[derive(Debug, thiserror::Error)]
+pub enum RunPodError {
+    #[error("RunPod API error ({status}): {body}")]
+    Api { status: u16, body: String },
+    #[error("{0}")]
+    Other(#[from] anyhow::Error),
+}
+
+impl RunPodError {
+    pub fn is_server_error(&self) -> bool {
+        matches!(self, Self::Api { status, .. } if *status >= 500)
+    }
+}
+
 pub struct RunPodClient {
     client: Client,
     api_key: String,
@@ -17,8 +31,8 @@ impl RunPodClient {
         }
     }
 
-    pub async fn create_pod(&self, input: &PodCreateInput) -> anyhow::Result<Pod> {
-        tracing::debug!(request = %serde_json::to_string_pretty(input)?, "Creating pod");
+    pub async fn create_pod(&self, input: &PodCreateInput) -> Result<Pod, RunPodError> {
+        tracing::debug!(request = %serde_json::to_string_pretty(input).unwrap_or_default(), "Creating pod");
 
         let resp = self
             .client
@@ -26,16 +40,20 @@ impl RunPodClient {
             .bearer_auth(&self.api_key)
             .json(input)
             .send()
-            .await?;
+            .await
+            .map_err(|e| RunPodError::Other(e.into()))?;
 
         let status = resp.status();
         let body = resp.text().await.unwrap_or_default();
         if !status.is_success() {
-            anyhow::bail!("RunPod API error ({status}): {body}");
+            return Err(RunPodError::Api {
+                status: status.as_u16(),
+                body,
+            });
         }
 
         tracing::debug!(%body, "Create pod response");
-        Ok(serde_json::from_str(&body)?)
+        serde_json::from_str(&body).map_err(|e| RunPodError::Other(e.into()))
     }
 
     pub async fn get_pod(&self, pod_id: &str) -> anyhow::Result<Pod> {

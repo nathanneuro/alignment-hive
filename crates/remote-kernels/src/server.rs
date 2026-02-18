@@ -147,10 +147,37 @@ impl RemoteKernelsServer {
 
         tracing::info!("Creating pod...");
 
-        let created_pod =
-            self.runpod.create_pod(&input).await.map_err(|e| {
-                McpError::internal_error(format!("Failed to create pod: {e}"), None)
-            })?;
+        // Retry on 500 errors — RunPod server errors are often transient (e.g. selected
+        // machine's GPUs were taken between selection and deployment).
+        let created_pod = {
+            let mut last_err = String::new();
+            let mut pod = None;
+            for attempt in 1..=3 {
+                match self.runpod.create_pod(&input).await {
+                    Ok(p) => {
+                        pod = Some(p);
+                        break;
+                    }
+                    Err(e) if e.is_server_error() && attempt < 3 => {
+                        last_err = e.to_string();
+                        tracing::info!(attempt, error = %last_err, "Pod creation failed (server error), retrying...");
+                        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+                    }
+                    Err(e) => {
+                        return Err(McpError::internal_error(
+                            format!("Failed to create pod: {e}"),
+                            None,
+                        ));
+                    }
+                }
+            }
+            pod.ok_or_else(|| {
+                McpError::internal_error(
+                    format!("Failed to create pod after 3 attempts: {last_err}"),
+                    None,
+                )
+            })?
+        };
 
         tracing::info!(pod_id = %created_pod.id, gpu = %created_pod.gpu_display_name(), "Pod created");
 
