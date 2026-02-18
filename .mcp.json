@@ -3,6 +3,10 @@
     "convex": {
       "command": "bunx",
       "args": ["convex@latest", "mcp", "start"]
+    },
+    "remote-kernels": {
+      "command": "cargo",
+      "args": ["run", "--manifest-path", "crates/remote-kernels/Cargo.toml", "--", "--project-dir", "."]
     }
   }
 }

@@ -96,6 +96,8 @@ No prefix on tool names — MCP server name (`remote-kernels`) provides namespac
 - Config written by setup skill (GPU type, image, startup commands, budget cap, cleanup behavior, notebook commit preference)
 - State file (e.g. `state.json`) maintained by MCP server with current pod ID — read by Stop hook
 
+**Security note:** Config is read fresh on each `start()`, and `start()` accepts GPU/image overrides. Claude can also edit the config file directly. Consider whether this needs guardrails.
+
 ## Authentication
 
 - RunPod API key via environment variable `RUNPOD_API_KEY` (with .env support)

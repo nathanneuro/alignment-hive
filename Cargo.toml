@@ -1,0 +1,3 @@
+[workspace]
+members = ["crates/remote-kernels"]
+resolver = "2"
