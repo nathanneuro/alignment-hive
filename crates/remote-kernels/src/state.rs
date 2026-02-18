@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 use crate::config::Cleanup;
 use crate::jupyter::rest::JupyterClient;
 use crate::jupyter::ws::KernelConnection;
+use crate::notebook::Notebook;
 use crate::runpod::types::Pod;
 
 /// Persisted state — written to `.claude/remote-kernels/state.json` so the stop hook can read it.
@@ -33,6 +34,10 @@ pub struct PodState {
     pub session_id: String,
     pub kernel_ids: Vec<String>,
     pub kernel_connections: HashMap<String, KernelConnection>,
+    pub notebooks: HashMap<String, Notebook>,
+    pub ssh_key_path: PathBuf,
+    pub public_ip: Option<String>,
+    pub ssh_port: Option<u16>,
 }
 
 impl AppState {
@@ -79,7 +84,13 @@ impl AppState {
     }
 
     /// Record that a pod has started.
-    pub fn set_pod(&mut self, pod: &Pod, jupyter: JupyterClient, jupyter_token: String) {
+    pub fn set_pod(
+        &mut self,
+        pod: &Pod,
+        jupyter: JupyterClient,
+        jupyter_token: String,
+        ssh_key_path: PathBuf,
+    ) {
         self.pod = Some(PodState {
             pod_id: pod.id.clone(),
             gpu_name: pod.gpu_display_name().to_string(),
@@ -90,6 +101,10 @@ impl AppState {
             session_id: uuid::Uuid::new_v4().to_string(),
             kernel_ids: Vec::new(),
             kernel_connections: HashMap::new(),
+            notebooks: HashMap::new(),
+            ssh_key_path,
+            public_ip: None,
+            ssh_port: None,
         });
     }
 

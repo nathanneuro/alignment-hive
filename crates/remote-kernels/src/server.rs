@@ -53,6 +53,14 @@ pub struct ExecuteParams {
     pub timeout: Option<u64>,
 }
 
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct DownloadParams {
+    /// Remote path on the pod to download.
+    pub remote_path: String,
+    /// Local path to save to.
+    pub local_path: String,
+}
+
 fn generate_token() -> String {
     use std::fmt::Write as _;
 
@@ -153,7 +161,12 @@ impl RemoteKernelsServer {
         // Save state immediately so we can clean up even if polling fails.
         {
             let mut state = self.state.lock().await;
-            state.set_pod(&created_pod, jupyter, jupyter_token.clone());
+            state.set_pod(
+                &created_pod,
+                jupyter,
+                jupyter_token.clone(),
+                ssh_keypair.private_key_path,
+            );
             if let Err(e) = state.save(self.config.cleanup) {
                 tracing::warn!("Failed to persist state: {e}");
             }
@@ -180,6 +193,7 @@ impl RemoteKernelsServer {
         // Connect WebSocket and record the kernel.
         {
             let mut state = self.state.lock().await;
+            let project_dir = state.project_dir.clone();
             if let Some(ref mut pod) = state.pod {
                 let conn = crate::jupyter::ws::KernelConnection::connect(
                     &pod.pod_id,
@@ -195,6 +209,10 @@ impl RemoteKernelsServer {
                 })?;
                 pod.kernel_ids.push(kernel_id.clone());
                 pod.kernel_connections.insert(kernel_id.clone(), conn);
+
+                if let Ok(nb) = crate::notebook::Notebook::new(&project_dir, &kernel_id) {
+                    pod.notebooks.insert(kernel_id.clone(), nb);
+                }
             }
         }
 
@@ -393,9 +411,14 @@ impl RemoteKernelsServer {
 
         {
             let mut state = self.state.lock().await;
+            let project_dir = state.project_dir.clone();
             if let Some(ref mut pod) = state.pod {
                 pod.kernel_ids.push(kernel_id.clone());
                 pod.kernel_connections.insert(kernel_id.clone(), conn);
+
+                if let Ok(nb) = crate::notebook::Notebook::new(&project_dir, &kernel_id) {
+                    pod.notebooks.insert(kernel_id.clone(), nb);
+                }
             }
         }
 
@@ -438,6 +461,13 @@ impl RemoteKernelsServer {
             .await
             .map_err(|e| McpError::internal_error(format!("Execution failed: {e}"), None))?;
 
+        // Auto-save to notebook.
+        if let Some(nb) = pod_state.notebooks.get_mut(&params.kernel_id)
+            && let Err(e) = nb.append_cell(&params.code, &output)
+        {
+            tracing::warn!("Failed to save notebook cell: {e}");
+        }
+
         let formatted = output.format();
         let is_error = output.error.is_some();
 
@@ -446,6 +476,72 @@ impl RemoteKernelsServer {
         } else {
             Ok(CallToolResult::success(vec![Content::text(formatted)]))
         }
+    }
+
+    #[tool(
+        name = "sync",
+        description = "Sync local project files to the running pod via rsync over SSH. Respects .gitignore. Requires the pod to have a public IP (may not work on all community cloud machines)."
+    )]
+    async fn sync(&self, _params: Parameters<EmptyParams>) -> Result<CallToolResult, McpError> {
+        let (project_dir, ssh_key_path) = {
+            let state = self.state.lock().await;
+            let Some(pod_state) = &state.pod else {
+                return Ok(CallToolResult::error(vec![Content::text(
+                    "No pod is running. Call start() first.",
+                )]));
+            };
+            (state.project_dir.clone(), pod_state.ssh_key_path.clone())
+        };
+
+        let (public_ip, ssh_port) = self.get_ssh_info().await?;
+        let volume_mount = self.config.volume_mount_path.clone();
+
+        let result = crate::sync::sync_to_pod(
+            &project_dir,
+            &ssh_key_path,
+            &public_ip,
+            ssh_port,
+            &volume_mount,
+        )
+        .await
+        .map_err(|e| McpError::internal_error(format!("Sync failed: {e}"), None))?;
+
+        Ok(CallToolResult::success(vec![Content::text(result)]))
+    }
+
+    #[tool(
+        name = "download",
+        description = "Download a file or directory from the pod to a local path."
+    )]
+    async fn download(
+        &self,
+        params: Parameters<DownloadParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let params = params.0;
+
+        let ssh_key_path = {
+            let state = self.state.lock().await;
+            let Some(pod_state) = &state.pod else {
+                return Ok(CallToolResult::error(vec![Content::text(
+                    "No pod is running. Call start() first.",
+                )]));
+            };
+            pod_state.ssh_key_path.clone()
+        };
+
+        let (public_ip, ssh_port) = self.get_ssh_info().await?;
+
+        let result = crate::sync::download_from_pod(
+            &ssh_key_path,
+            &public_ip,
+            ssh_port,
+            &params.remote_path,
+            std::path::Path::new(&params.local_path),
+        )
+        .await
+        .map_err(|e| McpError::internal_error(format!("Download failed: {e}"), None))?;
+
+        Ok(CallToolResult::success(vec![Content::text(result)]))
     }
 
     #[tool(
@@ -547,6 +643,69 @@ impl RemoteKernelsServer {
                 );
             }
         }
+    }
+
+    /// Get SSH connection info, refreshing from the API if needed.
+    async fn get_ssh_info(&self) -> Result<(String, u16), McpError> {
+        // Check if we already have it cached.
+        {
+            let state = self.state.lock().await;
+            if let Some(ref pod) = state.pod
+                && let (Some(ip), Some(port)) = (&pod.public_ip, pod.ssh_port)
+            {
+                return Ok((ip.clone(), port));
+            }
+        }
+
+        // Refresh from API.
+        self.refresh_ssh_info().await?;
+
+        let state = self.state.lock().await;
+        let Some(ref pod) = state.pod else {
+            return Err(McpError::internal_error("No pod running", None));
+        };
+        match (&pod.public_ip, pod.ssh_port) {
+            (Some(ip), Some(port)) => Ok((ip.clone(), port)),
+            _ => Err(McpError::internal_error(
+                "Pod does not have a public IP or SSH port mapping. \
+                 This may happen on some community cloud machines. \
+                 Try again in a moment, or use execute() to transfer files via Python.",
+                None,
+            )),
+        }
+    }
+
+    /// Fetch public IP and SSH port mapping from the `RunPod` API and cache in state.
+    async fn refresh_ssh_info(&self) -> Result<(), McpError> {
+        let pod_id = {
+            let state = self.state.lock().await;
+            state
+                .pod
+                .as_ref()
+                .map(|p| p.pod_id.clone())
+                .ok_or_else(|| McpError::internal_error("No pod running", None))?
+        };
+
+        let pod =
+            self.runpod.get_pod(&pod_id).await.map_err(|e| {
+                McpError::internal_error(format!("Failed to get pod info: {e}"), None)
+            })?;
+
+        let mut state = self.state.lock().await;
+        if let Some(ref mut pod_state) = state.pod {
+            if let Some(ref ip) = pod.public_ip
+                && !ip.is_empty()
+            {
+                pod_state.public_ip = Some(ip.clone());
+            }
+            if let Some(ref mappings) = pod.port_mappings
+                && let Some(&port) = mappings.get("22")
+            {
+                pod_state.ssh_port = Some(port);
+            }
+        }
+
+        Ok(())
     }
 }
 

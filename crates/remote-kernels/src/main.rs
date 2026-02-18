@@ -3,10 +3,12 @@
 
 mod config;
 mod jupyter;
+mod notebook;
 mod runpod;
 mod server;
 mod ssh;
 mod state;
+mod sync;
 
 use clap::Parser;
 use rmcp::ServiceExt;
