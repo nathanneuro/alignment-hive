@@ -216,6 +216,26 @@ impl RemoteKernelsServer {
             }
         }
 
+        // Install rsync on the pod (not included in default RunPod images).
+        {
+            let state = self.state.lock().await;
+            if let Some(ref pod) = state.pod
+                && let Some(conn) = pod.kernel_connections.get(&kernel_id)
+            {
+                let timeout = std::time::Duration::from_secs(60);
+                if let Err(e) = conn
+                    .execute(
+                        &pod.session_id,
+                        "import subprocess; subprocess.run('apt-get update -qq && apt-get install -y -qq rsync', shell=True, capture_output=True)",
+                        timeout,
+                    )
+                    .await
+                {
+                    tracing::warn!("Failed to install rsync on pod: {e}");
+                }
+            }
+        }
+
         Ok(CallToolResult::success(vec![Content::text(format!(
             "Pod started successfully!\n\
              - ID: {}\n\
