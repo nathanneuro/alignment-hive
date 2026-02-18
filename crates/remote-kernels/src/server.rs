@@ -263,6 +263,36 @@ impl RemoteKernelsServer {
             }
         }
 
+        // Start heartbeat + watchdog.
+        {
+            let state = self.state.lock().await;
+            if let Some(ref pod) = state.pod {
+                match crate::heartbeat::start(
+                    &pod.jupyter,
+                    &pod.pod_id,
+                    &pod.jupyter_token,
+                    &pod.session_id,
+                    self.config.cleanup,
+                )
+                .await
+                {
+                    Ok((hb_kernel_id, handle)) => {
+                        drop(state);
+                        let mut state = self.state.lock().await;
+                        if let Some(ref mut pod) = state.pod {
+                            pod.heartbeat = Some(crate::heartbeat::HeartbeatState {
+                                kernel_id: hb_kernel_id,
+                                task_handle: handle,
+                            });
+                        }
+                    }
+                    Err(e) => {
+                        tracing::warn!("Failed to start heartbeat/watchdog: {e}");
+                    }
+                }
+            }
+        }
+
         Ok(CallToolResult::success(vec![Content::text(format!(
             "Pod started successfully!\n\
              - ID: {}\n\
@@ -308,7 +338,11 @@ impl RemoteKernelsServer {
             .pod
             .as_ref()
             .map_or(0.0, |p| p.cost_per_hr * elapsed.as_secs_f64() / 3600.0);
-        state.pod = None;
+        if let Some(mut pod) = state.pod.take()
+            && let Some(hb) = pod.heartbeat.take()
+        {
+            hb.stop();
+        }
         if let Err(e) = state.clear() {
             tracing::warn!("Failed to clear state file: {e}");
         }
@@ -355,7 +389,11 @@ impl RemoteKernelsServer {
             .pod
             .as_ref()
             .map_or(0.0, |p| p.cost_per_hr * elapsed.as_secs_f64() / 3600.0);
-        state.pod = None;
+        if let Some(mut pod) = state.pod.take()
+            && let Some(hb) = pod.heartbeat.take()
+        {
+            hb.stop();
+        }
         if let Err(e) = state.clear() {
             tracing::warn!("Failed to clear state file: {e}");
         }
@@ -664,6 +702,11 @@ impl RemoteKernelsServer {
 }
 
 impl RemoteKernelsServer {
+    /// Get a clone of the shared state for use outside the MCP server (e.g. graceful shutdown).
+    pub fn shared_state(&self) -> Arc<Mutex<AppState>> {
+        Arc::clone(&self.state)
+    }
+
     /// Poll until the pod reaches RUNNING status.
     async fn wait_for_running(&self, pod_id: &str) -> anyhow::Result<crate::runpod::types::Pod> {
         let mut attempts = 0;

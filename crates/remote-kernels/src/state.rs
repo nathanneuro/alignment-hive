@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
 use crate::config::Cleanup;
+use crate::heartbeat::HeartbeatState;
 use crate::jupyter::rest::JupyterClient;
 use crate::jupyter::ws::KernelConnection;
 use crate::notebook::Notebook;
@@ -38,6 +39,7 @@ pub struct PodState {
     pub ssh_key_path: PathBuf,
     pub public_ip: Option<String>,
     pub ssh_port: Option<u16>,
+    pub heartbeat: Option<HeartbeatState>,
 }
 
 impl AppState {
@@ -105,6 +107,7 @@ impl AppState {
             ssh_key_path,
             public_ip: None,
             ssh_port: None,
+            heartbeat: None,
         });
     }
 

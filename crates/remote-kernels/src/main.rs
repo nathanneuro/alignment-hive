@@ -2,6 +2,7 @@
 #![allow(clippy::module_name_repetitions)]
 
 mod config;
+mod heartbeat;
 mod jupyter;
 mod notebook;
 mod runpod;
@@ -48,9 +49,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     })?;
 
     let config = config::Config::load(&project_dir)?;
+    let cleanup = config.cleanup;
     let app_state = state::AppState::new(project_dir);
 
-    let server = server::RemoteKernelsServer::new(config, api_key, app_state);
+    let server = server::RemoteKernelsServer::new(config, api_key.clone(), app_state);
+    let shared_state = server.shared_state();
 
     tracing::info!("Starting remote-kernels MCP server");
 
@@ -60,6 +63,32 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .inspect_err(|e| tracing::error!("Failed to start MCP server: {e}"))?;
 
     running.waiting().await?;
+
+    // Graceful shutdown: clean up pod if one is running.
+    tracing::info!("MCP server disconnected, cleaning up...");
+
+    let mut state = shared_state.lock().await;
+    if let Some(mut pod) = state.pod.take() {
+        // Stop heartbeat.
+        if let Some(hb) = pod.heartbeat.take() {
+            hb.stop();
+        }
+
+        // Stop or terminate the pod based on config.
+        let runpod = runpod::client::RunPodClient::new(api_key);
+        let result = match cleanup {
+            config::Cleanup::Stop => runpod.stop_pod(&pod.pod_id).await,
+            config::Cleanup::Terminate => runpod.terminate_pod(&pod.pod_id).await,
+        };
+        match result {
+            Ok(()) => tracing::info!(pod_id = %pod.pod_id, ?cleanup, "Pod cleaned up"),
+            Err(e) => tracing::warn!(pod_id = %pod.pod_id, "Failed to clean up pod: {e}"),
+        }
+
+        if let Err(e) = state.clear() {
+            tracing::warn!("Failed to clear state file: {e}");
+        }
+    }
 
     Ok(())
 }
