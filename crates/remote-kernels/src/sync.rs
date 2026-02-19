@@ -57,6 +57,7 @@ pub async fn sync_to_pod(
 
     let output = Command::new("rsync")
         .args(&args)
+        .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .output()
@@ -104,6 +105,7 @@ async fn ensure_rsync_on_pod(
                 &host,
                 "which rsync || (apt-get update -qq && apt-get install -y -qq rsync)",
             ])
+            .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .output(),
@@ -144,7 +146,16 @@ pub async fn download_from_pod(
     tracing::info!(%source, %destination, "Downloading from pod");
 
     let output = Command::new("rsync")
-        .args(["-az", "--no-owner", "--no-group", "-e", &ssh_cmd, &source, &destination])
+        .args([
+            "-az",
+            "--no-owner",
+            "--no-group",
+            "-e",
+            &ssh_cmd,
+            &source,
+            &destination,
+        ])
+        .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .output()

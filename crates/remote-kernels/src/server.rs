@@ -319,22 +319,21 @@ impl RemoteKernelsServer {
             }
         }
 
-        // Wait for pod to be running.
-        self.wait_for_running(&created_pod.id)
+        // Wait for pod to be running, start heartbeat, wait for Jupyter.
+        // If anything fails, clean up the pod so we don't leave a zombie.
+        if let Err(e) = self.wait_for_running(&created_pod.id).await {
+            self.cleanup_failed_start(&created_pod.id).await;
+            return Err(McpError::internal_error(
+                format!("Pod failed to start: {e}"),
+                None,
+            ));
+        }
+        if let Err(e) = self
+            .start_heartbeat_and_wait_for_jupyter(&created_pod.id, cost)
             .await
-            .map_err(|e| McpError::internal_error(format!("Pod failed to start: {e}"), None))?;
-
-        // Start heartbeat in background. It resolves SSH info via GraphQL
-        // internally — does not block start().
-        self.start_heartbeat(&created_pod.id, cost).await;
-
-        // Wait for Jupyter server to be ready.
         {
-            let state = self.state.lock().await;
-            let pod_state = state.pod.as_ref().expect("pod state exists");
-            pod_state.jupyter.wait_until_ready().await.map_err(|e| {
-                McpError::internal_error(format!("Jupyter failed to start: {e}"), None)
-            })?;
+            self.cleanup_failed_start(&created_pod.id).await;
+            return Err(e);
         }
 
         let mut msg = format!(
@@ -522,7 +521,12 @@ impl RemoteKernelsServer {
         let accumulated_spend = state.accumulated_spend;
         drop(state);
 
-        let Some(pod_id) = AppState::load_existing(&project_dir) else {
+        let Some(persisted) = AppState::load_persisted(&project_dir) else {
+            return Ok(CallToolResult::success(vec![Content::text(
+                "No pod is currently running.",
+            )]));
+        };
+        let Some(pod_id) = persisted.pod_id else {
             return Ok(CallToolResult::success(vec![Content::text(
                 "No pod is currently running.",
             )]));
@@ -532,14 +536,20 @@ impl RemoteKernelsServer {
         match self.runpod.get_pod(&pod_id).await {
             Ok(pod) => {
                 let status = pod.desired_status.as_deref().unwrap_or("unknown");
+                let gpu_name = match pod.gpu_display_name() {
+                    "unknown" => persisted
+                        .gpu_name
+                        .as_deref()
+                        .unwrap_or("unknown"),
+                    name => name,
+                };
                 let mut info = format!(
                     "Pod: {}\n\
                      Status: {status}\n\
-                     GPU: {}\n\
+                     GPU: {gpu_name}\n\
                      Session cost: ${accumulated_spend:.2}\n\
                      Note: Pod was stopped. Use terminate() to delete it.",
                     pod.id,
-                    pod.gpu_display_name(),
                 );
 
                 if let Some(budget) = self.budget {
@@ -1042,29 +1052,67 @@ impl RemoteKernelsServer {
     ) -> Result<CallToolResult, McpError> {
         let kernel_id = &params.0.kernel_id;
 
-        let mut state = self.state.lock().await;
-        let Some(pod_state) = &mut state.pod else {
-            return Ok(CallToolResult::error(vec![Content::text(
-                "No pod is running. Call start() first.",
-            )]));
+        let (pod_id, token) = {
+            let state = self.state.lock().await;
+            let Some(pod_state) = &state.pod else {
+                return Ok(CallToolResult::error(vec![Content::text(
+                    "No pod is running. Call start() first.",
+                )]));
+            };
+            if !pod_state.kernel_ids.contains(&kernel_id.clone()) {
+                return Ok(CallToolResult::error(vec![Content::text(format!(
+                    "Kernel {kernel_id} not found.",
+                ))]));
+            }
+            (pod_state.pod_id.clone(), pod_state.jupyter_token.clone())
         };
 
-        pod_state
-            .jupyter
-            .restart_kernel(kernel_id)
-            .await
-            .map_err(|e| {
-                McpError::internal_error(format!("Failed to restart kernel: {e}"), None)
-            })?;
+        // Restart via REST API (lock dropped so we don't hold it during the HTTP call).
+        {
+            let state = self.state.lock().await;
+            let pod_state = state.pod.as_ref().expect("pod exists");
+            pod_state
+                .jupyter
+                .restart_kernel(kernel_id)
+                .await
+                .map_err(|e| {
+                    McpError::internal_error(format!("Failed to restart kernel: {e}"), None)
+                })?;
+        }
+
+        // Reconnect WebSocket — restarting a kernel invalidates the old connection.
+        // Retry a few times since the kernel needs time to restart.
+        let mut conn = None;
+        for attempt in 1..=5 {
+            match crate::jupyter::ws::KernelConnection::connect(&pod_id, kernel_id, &token).await {
+                Ok(c) => {
+                    conn = Some(c);
+                    break;
+                }
+                Err(e) if attempt < 5 => {
+                    tracing::debug!(attempt, error = %e, "WebSocket reconnect after restart, retrying...");
+                    tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                }
+                Err(e) => {
+                    return Err(McpError::internal_error(
+                        format!("Failed to reconnect WebSocket after restart: {e}"),
+                        None,
+                    ));
+                }
+            }
+        }
+        let conn = conn.expect("connected after retries");
 
         // Create a new notebook file for the restarted kernel (old one is preserved as history).
+        let mut state = self.state.lock().await;
         let notebook_dir = state.project_dir.join(&self.config.notebook_dir);
         let mut notebook_path = None;
-        if let Some(ref mut pod) = state.pod
-            && let Ok(nb) = crate::notebook::Notebook::new(&notebook_dir, kernel_id, None)
-        {
-            notebook_path = Some(nb.path().to_path_buf());
-            pod.notebooks.insert(kernel_id.clone(), nb);
+        if let Some(ref mut pod) = state.pod {
+            pod.kernel_connections.insert(kernel_id.clone(), conn);
+            if let Ok(nb) = crate::notebook::Notebook::new(&notebook_dir, kernel_id, None) {
+                notebook_path = Some(nb.path().to_path_buf());
+                pod.notebooks.insert(kernel_id.clone(), nb);
+            }
         }
 
         let mut msg = format!("Kernel {kernel_id} restarted.");
@@ -1093,6 +1141,7 @@ impl RemoteKernelsServer {
         let jupyter_token = persisted.jupyter_token.as_deref()?;
         let ssh_key_path_str = persisted.ssh_key_path.as_deref()?;
         let ssh_key_path = std::path::PathBuf::from(ssh_key_path_str);
+        let persisted_gpu_name = persisted.gpu_name;
 
         // Verify the SSH key file still exists.
         if !ssh_key_path.exists() {
@@ -1119,8 +1168,14 @@ impl RemoteKernelsServer {
             "RUNNING" => {
                 // Pod is already running — just reconnect.
                 Some(
-                    self.reconnect_to_pod(pod_id, &pod, jupyter_token, ssh_key_path)
-                        .await,
+                    self.reconnect_to_pod(
+                        pod_id,
+                        &pod,
+                        jupyter_token,
+                        ssh_key_path,
+                        persisted_gpu_name,
+                    )
+                    .await,
                 )
             }
             "EXITED" => {
@@ -1139,8 +1194,14 @@ impl RemoteKernelsServer {
                 // Wait for it to reach RUNNING status.
                 match self.wait_for_running(pod_id).await {
                     Ok(running_pod) => Some(
-                        self.reconnect_to_pod(pod_id, &running_pod, jupyter_token, ssh_key_path)
-                            .await,
+                        self.reconnect_to_pod(
+                            pod_id,
+                            &running_pod,
+                            jupyter_token,
+                            ssh_key_path,
+                            persisted_gpu_name,
+                        )
+                        .await,
                     ),
                     Err(e) => Some(Err(McpError::internal_error(
                         format!("Pod failed to restart: {e}"),
@@ -1165,8 +1226,13 @@ impl RemoteKernelsServer {
         pod: &crate::runpod::types::Pod,
         jupyter_token: &str,
         ssh_key_path: std::path::PathBuf,
+        persisted_gpu_name: Option<String>,
     ) -> Result<CallToolResult, McpError> {
-        let gpu_name = pod.gpu_display_name().to_string();
+        // Prefer API response, fall back to persisted name from creation.
+        let gpu_name = match pod.gpu_display_name() {
+            "unknown" => persisted_gpu_name.unwrap_or_else(|| "unknown".to_string()),
+            name => name.to_string(),
+        };
         let cost = pod.cost_per_hr.unwrap_or(0.0);
         let jupyter = JupyterClient::new(pod_id, jupyter_token);
 
@@ -1179,16 +1245,13 @@ impl RemoteKernelsServer {
             }
         }
 
-        // Start heartbeat.
-        self.start_heartbeat(pod_id, cost).await;
-
-        // Wait for Jupyter.
+        // Start heartbeat, wait for Jupyter. Clean up on failure.
+        if let Err(e) = self
+            .start_heartbeat_and_wait_for_jupyter(pod_id, cost)
+            .await
         {
-            let state = self.state.lock().await;
-            let pod_state = state.pod.as_ref().expect("pod state exists");
-            pod_state.jupyter.wait_until_ready().await.map_err(|e| {
-                McpError::internal_error(format!("Jupyter failed to start: {e}"), None)
-            })?;
+            self.cleanup_failed_start(pod_id).await;
+            return Err(e);
         }
 
         let mut msg = format!(
@@ -1208,6 +1271,53 @@ impl RemoteKernelsServer {
         }
         msg.push_str("\n\nUse create_kernel() to start a kernel.");
         Ok(CallToolResult::success(vec![Content::text(msg)]))
+    }
+
+    /// Start heartbeat and wait for Jupyter to become ready. Returns an MCP
+    /// error if Jupyter never comes up.
+    async fn start_heartbeat_and_wait_for_jupyter(
+        &self,
+        pod_id: &str,
+        cost_per_hr: f64,
+    ) -> Result<(), McpError> {
+        self.start_heartbeat(pod_id, cost_per_hr).await;
+
+        {
+            let state = self.state.lock().await;
+            let pod_state = state.pod.as_ref().expect("pod state exists");
+            pod_state.jupyter.wait_until_ready().await.map_err(|e| {
+                McpError::internal_error(format!("Jupyter failed to start: {e}"), None)
+            })?;
+        }
+
+        Ok(())
+    }
+
+    /// Clean up after a failed `start()` or `reconnect_to_pod()`.
+    /// Terminates the pod on `RunPod` and removes it from in-memory state.
+    async fn cleanup_failed_start(&self, pod_id: &str) {
+        tracing::warn!(pod_id, "Cleaning up after failed start");
+
+        // Stop heartbeat if it was started.
+        {
+            let mut state = self.state.lock().await;
+            if let Some(mut pod) = state.pod.take()
+                && let Some(hb) = pod.heartbeat.take()
+            {
+                hb.stop();
+            }
+        }
+
+        // Terminate the pod on RunPod.
+        if let Err(e) = self.runpod.terminate_pod(pod_id).await {
+            tracing::warn!(pod_id, error = %e, "Failed to terminate pod after failed start");
+        }
+
+        // Clear persisted state.
+        let state = self.state.lock().await;
+        if let Err(e) = state.clear() {
+            tracing::warn!("Failed to clear state after failed start: {e}");
+        }
     }
 
     /// Start the heartbeat for the current pod. Shared by create and reconnect paths.

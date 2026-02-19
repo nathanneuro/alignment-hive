@@ -33,10 +33,6 @@ fn build_create_input() -> PodCreateInput {
     env.insert("PUBLIC_KEY".to_string(), ssh_pubkey.to_string());
     env.insert("JUPYTER_PASSWORD".to_string(), jupyter_token.to_string());
 
-    let mut parts = vec!["apt-get update -qq && apt-get install -y -qq rsync".to_string()];
-    parts.extend(config.startup_commands.clone());
-    let startup_cmd = vec![parts.join(" && ")];
-
     PodCreateInput {
         name: "investigate-test".to_string(),
         image_name: config.image_name.clone(),
@@ -53,7 +49,9 @@ fn build_create_input() -> PodCreateInput {
         network_volume_id: config.runpod.network_volume_id.clone(),
         ports: Some(vec!["8888/http".to_string(), "22/tcp".to_string()]),
         env: Some(env),
-        docker_start_cmd: Some(startup_cmd),
+        // NOTE: dockerStartCmd is NOT used — it replaces the container's CMD
+        // which prevents RunPod images from starting services (Jupyter, SSH).
+        docker_start_cmd: None,
         extra: HashMap::new(),
     }
 }

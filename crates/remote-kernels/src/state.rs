@@ -29,6 +29,9 @@ pub struct PersistedState {
     /// Path to the SSH private key for reconnecting.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ssh_key_path: Option<String>,
+    /// GPU name for display on reconnection (REST `get_pod` doesn't always include machine info).
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub gpu_name: Option<String>,
 }
 
 /// Runtime state held in memory by the MCP server.
@@ -97,6 +100,7 @@ impl AppState {
             cleanup,
             pod.map(|p| p.jupyter_token.as_str()),
             pod.map(|p| p.ssh_key_path.display().to_string()),
+            pod.map(|p| p.gpu_name.clone()),
         )
     }
 
@@ -108,10 +112,11 @@ impl AppState {
     pub fn save_with_pod_id(&self, pod_id: Option<&str>, cleanup: Cleanup) -> anyhow::Result<()> {
         // If the pod is still in memory, grab its reconnection details.
         // If already taken, fall back to whatever we have from state.json.
-        let (jupyter_token, ssh_key_path) = if let Some(p) = &self.pod {
+        let (jupyter_token, ssh_key_path, gpu_name) = if let Some(p) = &self.pod {
             (
                 Some(p.jupyter_token.clone()),
                 Some(p.ssh_key_path.display().to_string()),
+                Some(p.gpu_name.clone()),
             )
         } else {
             // Pod already taken — load reconnection details from disk.
@@ -119,9 +124,10 @@ impl AppState {
             (
                 existing.as_ref().and_then(|s| s.jupyter_token.clone()),
                 existing.as_ref().and_then(|s| s.ssh_key_path.clone()),
+                existing.as_ref().and_then(|s| s.gpu_name.clone()),
             )
         };
-        self.write_persisted(pod_id, cleanup, jupyter_token.as_deref(), ssh_key_path)
+        self.write_persisted(pod_id, cleanup, jupyter_token.as_deref(), ssh_key_path, gpu_name)
     }
 
     fn write_persisted(
@@ -130,6 +136,7 @@ impl AppState {
         cleanup: Cleanup,
         jupyter_token: Option<&str>,
         ssh_key_path: Option<String>,
+        gpu_name: Option<String>,
     ) -> anyhow::Result<()> {
         let dir = self.state_dir();
         std::fs::create_dir_all(&dir)?;
@@ -149,6 +156,7 @@ impl AppState {
             accumulated_spend: self.total_spend(),
             jupyter_token: jupyter_token.map(String::from),
             ssh_key_path,
+            gpu_name,
         };
 
         let json = serde_json::to_string_pretty(&persisted)?;

@@ -180,6 +180,7 @@ async fn ssh_cmd_long(
                 &host,
                 command,
             ])
+            .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .output(),
@@ -305,6 +306,7 @@ async fn ssh_cmd(
                 &host,
                 command,
             ])
+            .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .output(),

@@ -27,9 +27,12 @@ impl JupyterClient {
         }
     }
 
-    /// Poll until Jupyter server is reachable.
+    /// Poll until Jupyter server is fully ready (kernel manager initialized).
     pub async fn wait_until_ready(&self) -> anyhow::Result<()> {
-        let url = format!("{}/api", self.base_url);
+        // Use /api/kernels instead of /api — the base API endpoint can return
+        // 200 before the kernel manager is initialized, causing immediate
+        // create_kernel() calls to get 404.
+        let url = format!("{}/api/kernels", self.base_url);
         let mut attempts = 0;
 
         loop {
@@ -67,25 +70,40 @@ impl JupyterClient {
     }
 
     /// Create a new Python kernel, returns its ID.
+    ///
+    /// Retries on 404 errors — the Jupyter kernel manager may not be fully
+    /// initialized immediately after the server starts responding.
     pub async fn create_kernel(&self) -> anyhow::Result<KernelInfo> {
         let url = format!("{}/api/kernels", self.base_url);
-        let resp = self
-            .client
-            .post(&url)
-            .header("Authorization", format!("token {}", self.token))
-            .json(&serde_json::json!({"name": "python3"}))
-            .send()
-            .await?;
 
-        let status = resp.status();
-        if !status.is_success() {
+        for attempt in 1..=5 {
+            let resp = self
+                .client
+                .post(&url)
+                .header("Authorization", format!("token {}", self.token))
+                .json(&serde_json::json!({"name": "python3"}))
+                .send()
+                .await?;
+
+            let status = resp.status();
+            if status.is_success() {
+                let kernel: KernelInfo = resp.json().await?;
+                tracing::info!(kernel_id = %kernel.id, attempt, "Created kernel");
+                return Ok(kernel);
+            }
+
+            // Retry on 404 — kernel manager may still be initializing.
+            if status == reqwest::StatusCode::NOT_FOUND && attempt < 5 {
+                tracing::debug!(attempt, "Kernel creation returned 404, retrying...");
+                tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+                continue;
+            }
+
             let body = resp.text().await.unwrap_or_default();
             anyhow::bail!("Failed to create kernel ({status}): {body}");
         }
 
-        let kernel: KernelInfo = resp.json().await?;
-        tracing::info!(kernel_id = %kernel.id, "Created kernel");
-        Ok(kernel)
+        unreachable!()
     }
 
     /// List all running kernels.
