@@ -167,13 +167,13 @@ Setup skill recommends `inherit-env` by default, inspecting the project for rele
 ### Phase 1: Align existing implementation with design
 
 - **Heartbeat → SSH**: move from dedicated Jupyter kernel to SSH, run in background (don't block `start()`)
-- **rsync install**: move from Jupyter kernel to startup command
-- **start() no auto-kernel**: remove auto-create, let Claude use `create_kernel(name)`
-- **Kernel naming**: `create_kernel()` needs a `name` parameter, flows to notebook filename
-- **Interrupt tool**: wire existing `interrupt_kernel()` as an MCP tool
+- ~~**rsync install**: move from Jupyter kernel to startup command~~
+- ~~**start() no auto-kernel**: remove auto-create, let Claude use `create_kernel(name)`~~
+- ~~**Kernel naming**: `create_kernel()` needs a `name` parameter, flows to notebook filename~~
+- ~~**Interrupt tool**: wire existing `interrupt_kernel()` as an MCP tool~~
 - **Config split**: move RunPod-specific fields into `[runpod]` passthrough section
 - **Retry logic**: parse 500 error messages, cycle through GPU types independently
-- **Tool descriptions file**: extract all tool/server descriptions to a dedicated file
+- ~~**Tool descriptions file**: extract all tool/server descriptions to a dedicated file~~ (doc comments on methods — rmcp proc macro requires string literals, can't reference a separate constants file)
 
 ### Phase 2: New MCP server features
 
