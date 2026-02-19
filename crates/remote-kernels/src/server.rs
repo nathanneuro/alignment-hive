@@ -132,56 +132,86 @@ impl RemoteKernelsServer {
         env.insert("PUBLIC_KEY".to_string(), ssh_keypair.public_key_openssh);
         env.insert("JUPYTER_PASSWORD".to_string(), jupyter_token.clone());
 
-        let input = PodCreateInput {
-            name: self.config.name.clone(),
-            image_name,
-            gpu_type_ids,
-            gpu_count: Some(self.config.gpu_count),
-            cloud_type: Some(self.config.cloud_type.clone()),
-            container_disk_in_gb: Some(self.config.container_disk_gb),
-            volume_in_gb: if self.config.volume_gb > 0 {
-                Some(self.config.volume_gb)
-            } else {
-                None
-            },
-            volume_mount_path: Some(self.config.volume_mount_path.clone()),
-            network_volume_id: self.config.network_volume_id.clone(),
-            ports: Some(vec!["8888/http".to_string(), "22/tcp".to_string()]),
-            env: Some(env),
-            docker_start_cmd: Some(self.build_startup_cmd()),
-        };
-
         tracing::info!("Creating pod...");
 
-        // Retry on 500 errors — RunPod server errors are often transient (e.g. selected
-        // machine's GPUs were taken between selection and deployment).
+        // Try each GPU type in order. For each GPU type:
+        // - Availability errors (parsed from 500 body) → skip to next GPU type immediately
+        // - Other 500 errors → retry up to 3 times with 1s delay, then move to next GPU type
+        // - Non-500 errors → fail immediately
         let created_pod = {
-            let mut last_err = String::new();
-            let mut pod = None;
-            for attempt in 1..=3 {
-                match self.runpod.create_pod(&input).await {
-                    Ok(p) => {
-                        pod = Some(p);
-                        break;
-                    }
-                    Err(e) if e.is_server_error() && attempt < 3 => {
-                        last_err = e.to_string();
-                        tracing::info!(attempt, error = %last_err, "Pod creation failed (server error), retrying...");
-                        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
-                    }
-                    Err(e) => {
-                        return Err(McpError::internal_error(
-                            format!("Failed to create pod: {e}"),
-                            None,
-                        ));
+            let mut failures: Vec<(String, String)> = Vec::new();
+            let mut result_pod = None;
+
+            for gpu_type in &gpu_type_ids {
+                let input = PodCreateInput {
+                    name: self.config.name.clone(),
+                    image_name: image_name.clone(),
+                    gpu_type_ids: vec![gpu_type.clone()],
+                    gpu_count: Some(self.config.gpu_count),
+                    cloud_type: Some(self.config.cloud_type.clone()),
+                    container_disk_in_gb: Some(self.config.container_disk_gb),
+                    volume_in_gb: if self.config.volume_gb > 0 {
+                        Some(self.config.volume_gb)
+                    } else {
+                        None
+                    },
+                    volume_mount_path: Some(self.config.volume_mount_path.clone()),
+                    network_volume_id: self.config.network_volume_id.clone(),
+                    ports: Some(vec!["8888/http".to_string(), "22/tcp".to_string()]),
+                    env: Some(env.clone()),
+                    docker_start_cmd: Some(self.build_startup_cmd()),
+                };
+
+                tracing::info!(gpu_type = %gpu_type, "Trying GPU type...");
+
+                let mut succeeded = false;
+                for attempt in 1..=3 {
+                    match self.runpod.create_pod(&input).await {
+                        Ok(p) => {
+                            result_pod = Some(p);
+                            succeeded = true;
+                            break;
+                        }
+                        Err(e) if e.is_availability_error() => {
+                            tracing::info!(gpu_type = %gpu_type, error = %e, "No availability, skipping to next GPU type");
+                            failures.push((gpu_type.clone(), format!("no availability: {e}")));
+                            break;
+                        }
+                        Err(e) if e.is_server_error() && attempt < 3 => {
+                            tracing::info!(gpu_type = %gpu_type, attempt, error = %e, "Server error, retrying...");
+                            tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                        }
+                        Err(e) if e.is_server_error() => {
+                            // Final retry attempt failed
+                            tracing::info!(gpu_type = %gpu_type, error = %e, "Server error on final attempt, moving to next GPU type");
+                            failures.push((
+                                gpu_type.clone(),
+                                format!("server error after {attempt} attempts: {e}"),
+                            ));
+                            break;
+                        }
+                        Err(e) => {
+                            // Non-server error (e.g. 4xx, network) — fail immediately
+                            return Err(McpError::internal_error(
+                                format!("Failed to create pod: {e}"),
+                                None,
+                            ));
+                        }
                     }
                 }
+
+                if succeeded {
+                    break;
+                }
             }
-            pod.ok_or_else(|| {
-                McpError::internal_error(
-                    format!("Failed to create pod after 3 attempts: {last_err}"),
-                    None,
-                )
+
+            result_pod.ok_or_else(|| {
+                let mut msg = String::from("Failed to create pod — all GPU types exhausted:\n");
+                for (gpu, reason) in &failures {
+                    let _ = writeln!(msg, "  - {gpu}: {reason}");
+                }
+                msg.push_str("\nConsider editing gpu-type-ids in remote-kernels.toml to try different GPU types.");
+                McpError::internal_error(msg, None)
             })?
         };
 

@@ -16,6 +16,24 @@ impl RunPodError {
     pub fn is_server_error(&self) -> bool {
         matches!(self, Self::Api { status, .. } if *status >= 500)
     }
+
+    /// Check if this is a known GPU availability error (as opposed to an unknown server error).
+    /// `RunPod` returns HTTP 500 for transient availability issues with recognizable error messages.
+    pub fn is_availability_error(&self) -> bool {
+        match self {
+            Self::Api { status, body } if *status >= 500 => {
+                let lower = body.to_lowercase();
+                lower.contains("no instance")
+                    || lower.contains("no available")
+                    || lower.contains("insufficient")
+                    || lower.contains("out of capacity")
+                    || lower.contains("no gpu")
+                    || lower.contains("not available")
+                    || lower.contains("no machines")
+            }
+            _ => false,
+        }
+    }
 }
 
 pub struct RunPodClient {

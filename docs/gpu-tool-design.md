@@ -172,7 +172,7 @@ Setup skill recommends `inherit-env` by default, inspecting the project for rele
 - ~~**Kernel naming**: `create_kernel()` needs a `name` parameter, flows to notebook filename~~
 - ~~**Interrupt tool**: wire existing `interrupt_kernel()` as an MCP tool~~
 - **Config split**: move RunPod-specific fields into `[runpod]` passthrough section
-- **Retry logic**: parse 500 error messages, cycle through GPU types independently
+- ~~**Retry logic**: parse 500 error messages, cycle through GPU types independently~~
 - ~~**Tool descriptions file**: extract all tool/server descriptions to a dedicated file~~ (doc comments on methods — rmcp proc macro requires string literals, can't reference a separate constants file)
 
 ### Phase 2: New MCP server features

@@ -100,7 +100,13 @@ fn split_source(code: &str) -> Vec<String> {
 fn sanitize_filename(name: &str) -> String {
     let sanitized: String = name
         .chars()
-        .map(|c| if c.is_alphanumeric() || c == '-' || c == '_' { c } else { '_' })
+        .map(|c| {
+            if c.is_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
         .collect();
     let trimmed = sanitized.trim_matches('_');
     trimmed[..trimmed.len().min(64)].to_string()
