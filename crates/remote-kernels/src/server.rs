@@ -148,7 +148,7 @@ impl RemoteKernelsServer {
             network_volume_id: self.config.network_volume_id.clone(),
             ports: Some(vec!["8888/http".to_string(), "22/tcp".to_string()]),
             env: Some(env),
-            docker_start_cmd: None,
+            docker_start_cmd: Some(self.build_startup_cmd()),
         };
 
         tracing::info!("Creating pod...");
@@ -210,63 +210,13 @@ impl RemoteKernelsServer {
             .await
             .map_err(|e| McpError::internal_error(format!("Pod failed to start: {e}"), None))?;
 
-        // Wait for Jupyter server to be ready, then create first kernel.
-        let kernel_id = {
+        // Wait for Jupyter server to be ready.
+        {
             let state = self.state.lock().await;
             let pod_state = state.pod.as_ref().expect("pod state exists");
             pod_state.jupyter.wait_until_ready().await.map_err(|e| {
                 McpError::internal_error(format!("Jupyter failed to start: {e}"), None)
             })?;
-            let kernel = pod_state.jupyter.create_kernel().await.map_err(|e| {
-                McpError::internal_error(format!("Failed to create kernel: {e}"), None)
-            })?;
-            kernel.id
-        };
-
-        // Connect WebSocket and record the kernel.
-        {
-            let mut state = self.state.lock().await;
-            let project_dir = state.project_dir.clone();
-            if let Some(ref mut pod) = state.pod {
-                let conn = crate::jupyter::ws::KernelConnection::connect(
-                    &pod.pod_id,
-                    &kernel_id,
-                    &pod.jupyter_token,
-                )
-                .await
-                .map_err(|e| {
-                    McpError::internal_error(
-                        format!("Failed to connect WebSocket to kernel: {e}"),
-                        None,
-                    )
-                })?;
-                pod.kernel_ids.push(kernel_id.clone());
-                pod.kernel_connections.insert(kernel_id.clone(), conn);
-
-                if let Ok(nb) = crate::notebook::Notebook::new(&project_dir, &kernel_id, None) {
-                    pod.notebooks.insert(kernel_id.clone(), nb);
-                }
-            }
-        }
-
-        // Install rsync on the pod (not included in default RunPod images).
-        {
-            let state = self.state.lock().await;
-            if let Some(ref pod) = state.pod
-                && let Some(conn) = pod.kernel_connections.get(&kernel_id)
-            {
-                let timeout = std::time::Duration::from_secs(60);
-                if let Err(e) = conn
-                    .execute(
-                        &pod.session_id,
-                        "import subprocess; subprocess.run('apt-get update -qq && apt-get install -y -qq rsync', shell=True, capture_output=True)",
-                        timeout,
-                    )
-                    .await
-                {
-                    tracing::warn!("Failed to install rsync on pod: {e}");
-                }
-            }
         }
 
         // Start heartbeat + watchdog.
@@ -304,8 +254,9 @@ impl RemoteKernelsServer {
              - ID: {}\n\
              - GPU: {gpu_name}\n\
              - Cost: ${cost:.2}/hr\n\
-             - Kernel: {kernel_id}\n\
-             - Status: RUNNING",
+             - Status: RUNNING\n\
+             \n\
+             Use create_kernel() to start a kernel.",
             created_pod.id,
         ))]))
     }
@@ -733,6 +684,16 @@ impl RemoteKernelsServer {
     /// Get a clone of the shared state for use outside the MCP server (e.g. graceful shutdown).
     pub fn shared_state(&self) -> Arc<Mutex<AppState>> {
         Arc::clone(&self.state)
+    }
+
+    /// Build the startup command for the pod.
+    /// Installs rsync (not in default RunPod images) and runs user startup commands.
+    fn build_startup_cmd(&self) -> Vec<String> {
+        let mut parts = vec!["apt-get update -qq && apt-get install -y -qq rsync".to_string()];
+        parts.extend(self.config.startup_commands.clone());
+        // RunPod dockerStartCmd runs each element as a separate shell command.
+        // Combine into a single command so ordering is guaranteed.
+        vec![parts.join(" && ")]
     }
 
     /// Poll until the pod reaches RUNNING status.
