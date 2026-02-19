@@ -16,6 +16,11 @@
       "name": "llms-fetch-mcp",
       "source": "./plugins/llms-fetch-mcp",
       "description": "MCP server for fetching documentation with llms.txt support"
+    },
+    {
+      "name": "remote-kernels",
+      "source": "./plugins/remote-kernels",
+      "description": "Cloud GPU instances with Jupyter kernels for AI/ML workloads"
     }
   ]
 }

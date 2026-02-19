@@ -1,4 +1,4 @@
-use clap::Parser;
+use clap::{Parser, Subcommand};
 use rmcp::ServiceExt;
 use std::path::PathBuf;
 
@@ -10,13 +10,34 @@ use remote_kernels::{config, runpod, server, state};
     about = "MCP server for cloud GPU instances with Jupyter kernels"
 )]
 struct Cli {
+    #[command(subcommand)]
+    command: Option<Command>,
+
     /// Project directory (where remote-kernels.toml lives).
-    #[arg(long, default_value = ".")]
+    #[arg(long, default_value = ".", global = true)]
     project_dir: PathBuf,
+}
+
+#[derive(Subcommand)]
+enum Command {
+    /// Print a commented TOML config template to stdout.
+    ConfigTemplate,
 }
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let cli = Cli::parse();
+
+    match cli.command {
+        Some(Command::ConfigTemplate) => {
+            print!("{}", config::Config::template());
+            return Ok(());
+        }
+        None => serve(cli.project_dir).await,
+    }
+}
+
+async fn serve(project_dir: PathBuf) -> Result<(), Box<dyn std::error::Error>> {
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
@@ -25,9 +46,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .with_writer(std::io::stderr)
         .init();
 
-    let cli = Cli::parse();
-
-    let project_dir = cli.project_dir.canonicalize().unwrap_or(cli.project_dir);
+    let project_dir = project_dir.canonicalize().unwrap_or(project_dir);
 
     // Load .env.local (then .env) from project directory if present.
     let _ = dotenvy::from_path(project_dir.join(".env.local"));

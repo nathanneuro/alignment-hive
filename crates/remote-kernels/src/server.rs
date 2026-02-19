@@ -537,10 +537,7 @@ impl RemoteKernelsServer {
             Ok(pod) => {
                 let status = pod.desired_status.as_deref().unwrap_or("unknown");
                 let gpu_name = match pod.gpu_display_name() {
-                    "unknown" => persisted
-                        .gpu_name
-                        .as_deref()
-                        .unwrap_or("unknown"),
+                    "unknown" => persisted.gpu_name.as_deref().unwrap_or("unknown"),
                     name => name,
                 };
                 let mut info = format!(

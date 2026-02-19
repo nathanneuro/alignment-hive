@@ -171,13 +171,13 @@ Setup skill recommends `inherit-env` by default, inspecting the project for rele
 - **Connect to arbitrary pod**: `start(pod_id)` to connect to a pod not created by this MCP server instance (e.g. created manually). Challenge: injecting SSH keys into a running pod. Deferred until there's user demand. (Note: reconnecting to pods from *previous sessions* of the same MCP server is already supported — credentials are persisted in state.json.)
 - **End-to-end testing**: Integration tests that exercise the full flow — start pod, create kernel, execute, sync, download, budget enforcement, queuing, get_output, terminate. Currently no automated tests.
 
-### Plugin and distribution
+### Plugin and distribution — DONE
 
-Depends on the MCP server being stable:
-
-- **Plugin shell**: plugin.json, .mcp.json, setup skill, stop hook
-- **Setup skill**: should include setting a budget as an explicit step, recommending `REMOTE_KERNELS_BUDGET` in `.claude/settings.json`
-- **Binary distribution**: GitHub releases, bootstrap script, platform-specific binaries
+- Plugin shell: plugin.json, .mcp.json, setup skill, SessionStart hook
+- Setup skill with config-template interpolation and budget setup step
+- Binary distribution via cargo-dist: GitHub releases, bootstrap script, 4 platform targets
+- Marketplace registration in alignment-hive
+- Cleanup relies on MCP server graceful shutdown + pod watchdog (no Stop/SessionEnd hook for v1; may revisit with async hooks in the future)
 
 ## Key Findings from Docs
 

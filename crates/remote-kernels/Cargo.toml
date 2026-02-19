@@ -4,6 +4,9 @@ version = "0.1.0"
 edition = "2024"
 description = "MCP server for spinning up cloud GPU instances and interacting with persistent Jupyter kernels"
 license = "MIT"
+repository = "https://github.com/Crazytieguy/alignment-hive"
+homepage = "https://github.com/Crazytieguy/alignment-hive"
+authors = ["Yoav Tzfati <yoav.tzfati@gmail.com>"]
 
 default-run = "remote-kernels"
 

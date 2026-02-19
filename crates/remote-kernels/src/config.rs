@@ -92,9 +92,9 @@ pub struct RunpodConfig {
 #[serde(rename_all = "lowercase")]
 pub enum Cleanup {
     /// Stop the pod (preserves state, can be restarted, still incurs storage costs).
-    #[default]
     Stop,
     /// Terminate/delete the pod (all data lost).
+    #[default]
     Terminate,
     /// Disabled: no automatic cleanup. User must stop/terminate manually.
     Disabled,
@@ -151,5 +151,101 @@ impl Config {
         let config: Self = toml::from_str(&content)?;
         tracing::info!(?config_path, "Loaded config");
         Ok(config)
+    }
+
+    /// Generate a commented TOML config template with all fields and their defaults.
+    /// This is the single source of truth — the setup skill reads this output
+    /// instead of duplicating field knowledge.
+    #[must_use]
+    pub fn template() -> String {
+        format!(
+            r#"# remote-kernels configuration
+# https://github.com/Crazytieguy/alignment-hive
+
+# GPU types to try, in order of preference.
+# Default: ["{default_gpu}"]
+# gpu-type-ids = ["{default_gpu}"]
+
+# Container image to run on the pod.
+# Default: "{default_image}"
+# image-name = "{default_image}"
+
+# Cleanup mode when the session ends:
+#   "stop"      — preserve pod (can restart later, storage costs apply)
+#   "terminate" — delete pod (all non-volume data lost, no ongoing costs)
+#   "disabled"  — no automatic cleanup (user manages pod lifecycle manually)
+# Default: "{default_cleanup}"
+# cleanup = "{default_cleanup}"
+
+# Custom name prefix for pods.
+# Default: "{default_name}"
+# name = "{default_name}"
+
+# Per-session budget cap in dollars. Prefer setting REMOTE_KERNELS_BUDGET
+# in .claude/settings.json (Claude can't edit that) over this field.
+# Incompatible with cleanup = "disabled".
+# budget-cap = 5.0
+
+# Environment variable names to forward from the local environment to the pod.
+# Variables from .env and .env.local files are included automatically.
+# inherit-env = ["HF_TOKEN", "WANDB_API_KEY"]
+
+# Path to a dotenv file whose variables should be loaded onto the pod.
+# Resolved relative to the project root.
+# env-file = ".env.pod"
+
+# Directory for notebook files (relative to project root).
+# Default: "{default_notebook_dir}"
+# notebook-dir = "{default_notebook_dir}"
+
+# Extra paths to include when syncing, even if gitignored.
+# sync-include = ["data/small-dataset/"]
+
+# Commands to run on the pod after startup (e.g., install packages).
+# startup-commands = ["pip install my-package"]
+
+# Explicit environment variables to set on the pod.
+# [env]
+# MY_VAR = "value"
+
+# RunPod API configuration. Known fields are typed; any extra fields
+# are passed through to the RunPod pod creation API (camelCase conversion applied).
+[runpod]
+# Number of GPUs.
+# Default: {default_gpu_count}
+# gpu-count = {default_gpu_count}
+
+# Container disk size in GB.
+# Default: {default_container_disk_gb}
+# container-disk-gb = {default_container_disk_gb}
+
+# Persistent volume size in GB (set to 0 to disable).
+# Default: {default_volume_gb}
+# volume-gb = {default_volume_gb}
+
+# Mount path for volumes.
+# Default: "{default_volume_mount_path}"
+# volume-mount-path = "{default_volume_mount_path}"
+
+# Network volume ID (optional, for persistent data across pod terminations).
+# Must be in the same datacenter as the pod.
+# network-volume-id = "vol_abc123"
+
+# Cloud type: "SECURE" or "COMMUNITY".
+# COMMUNITY is cheaper but may have less reliable availability.
+# Default: "{default_cloud_type}"
+# cloud-type = "{default_cloud_type}"
+"#,
+            default_gpu = default_gpu_type_ids()[0],
+            default_image = default_image_name(),
+            default_cleanup = "terminate",
+            default_name = default_name(),
+            default_notebook_dir = default_notebook_dir().display(),
+            default_gpu_count = default_gpu_count(),
+            default_container_disk_gb = default_container_disk_gb(),
+            default_volume_gb = default_volume_gb(),
+            default_volume_mount_path = default_volume_mount_path(),
+            default_cloud_type = default_cloud_type(),
+        )
     }
 }

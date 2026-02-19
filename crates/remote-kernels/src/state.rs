@@ -127,7 +127,13 @@ impl AppState {
                 existing.as_ref().and_then(|s| s.gpu_name.clone()),
             )
         };
-        self.write_persisted(pod_id, cleanup, jupyter_token.as_deref(), ssh_key_path, gpu_name)
+        self.write_persisted(
+            pod_id,
+            cleanup,
+            jupyter_token.as_deref(),
+            ssh_key_path,
+            gpu_name,
+        )
     }
 
     fn write_persisted(

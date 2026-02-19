@@ -49,6 +49,13 @@ Also available:
 
 Adds an MCP server for fetching documentation with [llms.txt](https://llmstxt.org/) support.
 
+For projects using cloud GPUs (requires a [RunPod](https://runpod.io) account):
+```
+/plugin install remote-kernels@alignment-hive
+```
+
+Adds an MCP server for spinning up GPU pods and running code in Jupyter kernels. Run `/remote-kernels:setup` to configure.
+
 ### Start your project
 
 Exit Claude Code and navigate to your project directory:

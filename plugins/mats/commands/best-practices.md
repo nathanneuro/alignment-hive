@@ -43,6 +43,7 @@ Walk through all recommendations as a guided setup. For each category:
 Check `.claude/settings.json` for installed plugins. Propose relevant ones:
 
 - **MATS/Alignment**: `hive-mind@alignment-hive` - **Always ask about this one**
+- **Python + GPU compute**: `remote-kernels@alignment-hive` — cloud GPU instances with Jupyter kernels (RunPod)
 - **TypeScript/JavaScript**: `frontend-design` (for web projects)
 - **Agent development**: `agent-sdk-dev`
 
