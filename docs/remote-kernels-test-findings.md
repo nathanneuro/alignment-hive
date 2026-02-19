@@ -70,9 +70,63 @@ All execution, file, and kernel management features — steps covering `create_k
 
 ---
 
-## End-to-End Test Plan (next session)
+---
 
-Run against the live MCP server (requires session restart to reload the binary):
+## Session 2 Findings
+
+### What Works
+
+| Tool | Result |
+|------|--------|
+| `status()` with no pod | Clean: "No pod is currently running" |
+| `start()` | Pod created, Jupyter ready, returns pod info |
+| `create_kernel()` | Kernel created, notebook path returned |
+| `execute()` | Code runs, stdout returned |
+| `status()` with running pod | Shows pod ID, GPU, cost, uptime, kernels |
+| `terminate()` | Terminates pod, returns session cost |
+| `sync()` (after fix — see below) | Files synced successfully |
+
+### Bugs Found
+
+**B4 — Intermittent MCP server disconnect during `create_kernel()`**
+
+Observed in early test attempts (before debug logging was added). Symptoms:
+- `create_kernel()` call returns `MCP error -32000: Connection closed`
+- Subsequent calls show "No pod is running" — server lost in-memory state
+- Log shows: `MCP server disconnected, cleaning up...` followed ~300ms later by `Created kernel kernel_id=...` — the kernel was actually created concurrently with the cleanup
+- Pod is terminated by cleanup code (cleanup=Terminate)
+- rmcp debug logs added in this session (`rmcp=info` in log filter) to help diagnose future occurrences
+
+Timing correlation observed across failed vs successful runs (from log timestamps): in failed runs, the heartbeat background task reached its `loop {}` phase at approximately the same time `start()` returned. In successful runs, the heartbeat loop started several seconds after `start()` returned. **Root cause not yet identified.**
+
+Not reproduced after debug logging was added. Bug is intermittent / timing-dependent.
+
+**B5 — `start()` does not clean up on failure**
+
+When `start()` returns an error (observed: "Jupyter failed to start: Jupyter server did not become ready after 3 minutes"), the pod remains in memory as if running. `status()` confirms the pod is still tracked. The user must call `terminate()` manually before `start()` can be called again.
+
+Additionally observed: when the pod failed to become ready in this case, the heartbeat task also failed (`SSH info not available after 2 minutes`). The pod was running on RunPod but unusable.
+
+**B6 — `sync()` fails with permission error** (Fixed — see below)
+
+`rsync` exited with `chown ... failed: Operation not permitted` for every file and directory.
+
+### Fixes Applied
+
+**B6: rsync ownership preservation**
+
+rsync's `-a` archive flag includes `-o` (preserve owner) and `-g` (preserve group). These fail when the destination user lacks permission to `chown` files. Added `--no-owner --no-group` flags to both `sync_to_pod()` and `download_from_pod()` in `sync.rs`.
+
+### Tests Not Run
+
+- `stop()` → `status()` (stopped pod visibility)
+- `terminate()` on stopped pod
+- Cross-session pod reconnection (`start()` in a new session reconnects to existing pod)
+- `get_output()`, `interrupt()`, `restart_kernel()`, `shutdown_kernel()`, `download()`
+
+---
+
+## End-to-End Test Plan (next session)
 
 1. `start()` — pod creates, Jupyter ready
 2. `create_kernel()` → `execute()` — run Python code

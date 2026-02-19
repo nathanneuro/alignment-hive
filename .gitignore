@@ -7,3 +7,7 @@ docs/data/
 
 # Rust
 target/
+
+# remote-kernels MCP server
+/remote-kernels/
+/remote-kernels.log

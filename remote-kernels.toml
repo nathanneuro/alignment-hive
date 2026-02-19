@@ -43,6 +43,6 @@ cleanup = "terminate"
 # network-volume-id = "vol_abc123"
 
 # Cloud type: "SECURE" or "COMMUNITY".
-cloud-type = "COMMUNITY"
+cloud-type = "SECURE"
 
 # Any additional RunPod API fields can be added here (kebab-case, converted to camelCase for the API).

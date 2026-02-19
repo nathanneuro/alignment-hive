@@ -31,7 +31,12 @@ pub async fn sync_to_pod(
 
     tracing::info!(%destination, "Syncing files to pod");
 
-    let mut args = vec!["-az".to_string(), "--delete".to_string()];
+    let mut args = vec![
+        "-az".to_string(),
+        "--no-owner".to_string(),
+        "--no-group".to_string(),
+        "--delete".to_string(),
+    ];
 
     // Include paths go before the gitignore filter so they take priority.
     for include in extra_includes {
@@ -139,7 +144,7 @@ pub async fn download_from_pod(
     tracing::info!(%source, %destination, "Downloading from pod");
 
     let output = Command::new("rsync")
-        .args(["-az", "-e", &ssh_cmd, &source, &destination])
+        .args(["-az", "--no-owner", "--no-group", "-e", &ssh_cmd, &source, &destination])
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .output()
