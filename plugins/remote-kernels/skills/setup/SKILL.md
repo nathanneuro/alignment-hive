@@ -18,7 +18,7 @@ All available fields with defaults (generated from the MCP server source code):
 
 ## Workflow
 
-Walk through this interactively with the user using AskUserQuestion. Start by writing the config template to `remote-kernels.toml`, then discuss each area and edit the file based on their answers. Adapt to what the user already knows — skip areas they've already handled, explore areas where they have questions.
+Walk through this interactively with the user using AskUserQuestion. Start by writing the config template to `remote-kernels.toml`, then go through **every area below** and edit the file based on their answers. Do not skip any area — even if the user seems experienced, confirm their preferences for each one. Adapt depth to what the user already knows: be brief when they're confident, explore when they have questions.
 
 ### Areas to cover
 
@@ -32,4 +32,4 @@ Walk through this interactively with the user using AskUserQuestion. Start by wr
 - **Notebooks** — the MCP server saves kernel activity as `.ipynb` files. Decide whether to commit them or gitignore
 - **Clean up** — remove commented-out lines from the config, keeping only what was configured
 
-Finish by telling the user to reload the MCP server (run `/mcp` or restart Claude Code) so the new config takes effect, then try: `start()` → `create_kernel()` → `execute(kernel_id, 'import torch; print(torch.cuda.is_available())')`.
+Finish by telling the user to reload the MCP server (run `/mcp` or restart Claude Code) so the new config takes effect, then offer to try starting a pod for them.
