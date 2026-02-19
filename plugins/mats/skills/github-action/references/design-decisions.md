@@ -19,7 +19,7 @@ With `cancel-in-progress: true`, new comments cancel running jobs and Claude los
 
 ## Skip Check Step
 
-Queued runs check if the most recently *updated* comment is by `claude[bot]`. If so, Claude already picked up the triggering comment via the wrapper script. Uses `sort_by(.updated_at)` because sorting by creation time would miss tracking comment edits.
+Queued runs compare the timestamp of `claude[bot]`'s most recently updated comment against the triggering event's timestamp (`review.submitted_at` or `comment.created_at`). If Claude already commented after the trigger, the queued run skips. This is more robust than checking who left the last comment, because PR reviews (e.g. "request changes") don't appear in the issue comments endpoint—only in the pull request reviews endpoint.
 
 ## Separate Issue and PR Workflows
 
