@@ -75,6 +75,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let mut state = shared_state.lock().await;
     if let Some(mut pod) = state.pod.take() {
+        let pod_id = pod.pod_id.clone();
+
         // Stop heartbeat.
         if let Some(hb) = pod.heartbeat.take() {
             hb.stop();
@@ -83,26 +85,33 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         // Stop or terminate the pod based on config.
         match cleanup {
             config::Cleanup::Disabled => {
-                tracing::info!(pod_id = %pod.pod_id, "Cleanup disabled, leaving pod running");
+                tracing::info!(pod_id = %pod_id, "Cleanup disabled, leaving pod running");
             }
             _ => {
                 let runpod = runpod::client::RunPodClient::new(api_key);
                 let result = match cleanup {
-                    config::Cleanup::Stop => runpod.stop_pod(&pod.pod_id).await,
-                    config::Cleanup::Terminate => runpod.terminate_pod(&pod.pod_id).await,
+                    config::Cleanup::Stop => runpod.stop_pod(&pod_id).await,
+                    config::Cleanup::Terminate => runpod.terminate_pod(&pod_id).await,
                     config::Cleanup::Disabled => unreachable!(),
                 };
                 match result {
-                    Ok(()) => tracing::info!(pod_id = %pod.pod_id, ?cleanup, "Pod cleaned up"),
+                    Ok(()) => tracing::info!(pod_id = %pod_id, ?cleanup, "Pod cleaned up"),
                     Err(e) => {
-                        tracing::warn!(pod_id = %pod.pod_id, "Failed to clean up pod: {e}");
+                        tracing::warn!(pod_id = %pod_id, "Failed to clean up pod: {e}");
                     }
                 }
             }
         }
 
-        if let Err(e) = state.clear() {
-            tracing::warn!("Failed to clear state file: {e}");
+        // For terminate: clear state since the pod is deleted.
+        // For stop/disabled: preserve pod_id so the next session can find/terminate it.
+        state.snapshot_spend();
+        let save_result = match cleanup {
+            config::Cleanup::Terminate => state.clear(),
+            _ => state.save_with_pod_id(Some(&pod_id), cleanup),
+        };
+        if let Err(e) = save_result {
+            tracing::warn!("Failed to save state file: {e}");
         }
     }
 

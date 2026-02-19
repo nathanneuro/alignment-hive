@@ -123,8 +123,18 @@ pub struct GraphQlPod {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PodRuntime {
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_null_as_default")]
     pub ports: Vec<PodRuntimePort>,
+}
+
+/// Deserialize `null` as the default value for a type.
+/// `#[serde(default)]` only handles missing fields, not explicit `null` values.
+fn deserialize_null_as_default<'de, D, T>(deserializer: D) -> Result<T, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Default + serde::Deserialize<'de>,
+{
+    Ok(Option::<T>::deserialize(deserializer)?.unwrap_or_default())
 }
 
 /// A single port mapping from the GraphQL runtime.

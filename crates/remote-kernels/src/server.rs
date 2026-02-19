@@ -119,11 +119,14 @@ impl RemoteKernelsServer {
 
     /// Spin up a GPU pod. Uses settings from remote-kernels.toml, with optional overrides.
     /// Returns pod info.
+    ///
+    /// If a pod from a previous session exists (stopped or running), reconnects to it
+    /// instead of creating a new one. Use `terminate()` first if you want a fresh pod.
     #[tool(name = "start")]
     async fn start(&self, params: Parameters<StartParams>) -> Result<CallToolResult, McpError> {
         let params = params.0;
 
-        // Check if a pod is already running
+        // Check if a pod is already active in memory.
         {
             let state = self.state.lock().await;
             if let Some(ref pod) = state.pod {
@@ -134,7 +137,23 @@ impl RemoteKernelsServer {
             }
         }
 
-        // Generate ephemeral SSH keypair and Jupyter token.
+        // Try to reconnect to a pod from a previous session.
+        // Skip if the user passed explicit overrides — they want a specific config.
+        let has_overrides = params.gpu_type.is_some() || params.image.is_some();
+        if has_overrides {
+            // User wants specific settings — don't silently reconnect to a different pod.
+            let project_dir = self.state.lock().await.project_dir.clone();
+            if let Some(pod_id) = AppState::load_existing(&project_dir) {
+                return Ok(CallToolResult::error(vec![Content::text(format!(
+                    "An existing pod ({pod_id}) was found from a previous session. \
+                     Use terminate() to delete it before starting a pod with different settings."
+                ))]));
+            }
+        } else if let Some(result) = self.try_reconnect().await {
+            return result;
+        }
+
+        // No existing pod — create a new one.
         let project_dir = self.state.lock().await.project_dir.clone();
         let ssh_keypair = crate::ssh::generate_keypair(&project_dir).map_err(|e| {
             McpError::internal_error(format!("Failed to generate SSH keypair: {e}"), None)
@@ -219,7 +238,11 @@ impl RemoteKernelsServer {
                     network_volume_id: runpod.network_volume_id.clone(),
                     ports: Some(vec!["8888/http".to_string(), "22/tcp".to_string()]),
                     env: Some(env.clone()),
-                    docker_start_cmd: Some(self.build_startup_cmd()),
+                    // NOTE: dockerStartCmd is NOT used — it replaces the container's
+                    // CMD which prevents RunPod images from starting services (Jupyter,
+                    // SSH). Startup commands (rsync install, user commands) run via SSH
+                    // in the heartbeat pipeline instead.
+                    docker_start_cmd: None,
                     extra,
                 };
 
@@ -303,28 +326,7 @@ impl RemoteKernelsServer {
 
         // Start heartbeat in background. It resolves SSH info via GraphQL
         // internally — does not block start().
-        {
-            let mut state = self.state.lock().await;
-            let accumulated_spend = state.accumulated_spend;
-            if let Some(ref mut pod_state) = state.pod {
-                // Calculate remaining budget time for pod-side enforcement.
-                #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-                let budget_remaining_secs = self.budget.map(|budget| {
-                    let remaining_dollars = budget - accumulated_spend;
-                    let secs = (remaining_dollars / cost) * 3600.0;
-                    secs.max(0.0) as u64
-                });
-
-                let hb = crate::heartbeat::start(
-                    Arc::clone(&self.runpod),
-                    created_pod.id.clone(),
-                    pod_state.ssh_key_path.clone(),
-                    self.config.cleanup,
-                    budget_remaining_secs,
-                );
-                pod_state.heartbeat = Some(hb);
-            }
-        }
+        self.start_heartbeat(&created_pod.id, cost).await;
 
         // Wait for Jupyter server to be ready.
         {
@@ -355,8 +357,8 @@ impl RemoteKernelsServer {
         Ok(CallToolResult::success(vec![Content::text(msg)]))
     }
 
-    /// Stop the running pod. The pod is preserved and can be restarted (storage costs still apply).
-    /// Use `terminate()` to fully delete it.
+    /// Stop the running pod. The pod is preserved (storage costs still apply).
+    /// Call `start()` to resume it, or `terminate()` to delete it.
     #[tool(name = "stop")]
     async fn stop(&self, _params: Parameters<EmptyParams>) -> Result<CallToolResult, McpError> {
         let pod_id = {
@@ -364,9 +366,20 @@ impl RemoteKernelsServer {
             match &state.pod {
                 Some(pod) => pod.pod_id.clone(),
                 None => {
-                    return Ok(CallToolResult::error(vec![Content::text(
-                        "No pod is running. Call start() first.",
-                    )]));
+                    // Check if there's a stopped pod on disk.
+                    match AppState::load_existing(&state.project_dir) {
+                        Some(id) => {
+                            return Ok(CallToolResult::error(vec![Content::text(format!(
+                                "Pod {id} is already stopped. Use terminate() to delete it, \
+                                 or restart it from the RunPod dashboard."
+                            ))]));
+                        }
+                        None => {
+                            return Ok(CallToolResult::error(vec![Content::text(
+                                "No pod is running. Call start() first.",
+                            )]));
+                        }
+                    }
                 }
             }
         };
@@ -380,18 +393,21 @@ impl RemoteKernelsServer {
 
         let mut state = self.state.lock().await;
         state.snapshot_spend();
-        let total = state.total_spend();
         if let Some(mut pod) = state.pod.take()
             && let Some(hb) = pod.heartbeat.take()
         {
             hb.stop();
         }
-        if let Err(e) = state.save(self.config.cleanup) {
+        // total_spend() after take(): accumulated_spend (includes snapshot) + 0 = correct.
+        let total = state.total_spend();
+        // Preserve pod_id on disk so status() and terminate() can find stopped pods.
+        if let Err(e) = state.save_with_pod_id(Some(&pod_id), self.config.cleanup) {
             tracing::warn!("Failed to save state: {e}");
         }
 
         Ok(CallToolResult::success(vec![Content::text(format!(
-            "Pod {pod_id} stopped. Session cost: ${total:.2}. The pod is preserved and can be restarted from the RunPod dashboard.",
+            "Pod {pod_id} stopped. Session cost: ${total:.2}. \
+             Use terminate() to delete it, or restart it from the RunPod dashboard.",
         ))]))
     }
 
@@ -402,19 +418,25 @@ impl RemoteKernelsServer {
         &self,
         _params: Parameters<EmptyParams>,
     ) -> Result<CallToolResult, McpError> {
-        let pod_id = {
+        let (pod_id, from_disk) = {
             let state = self.state.lock().await;
             match &state.pod {
-                Some(pod) => pod.pod_id.clone(),
+                Some(pod) => (pod.pod_id.clone(), false),
                 None => {
-                    return Ok(CallToolResult::error(vec![Content::text(
-                        "No pod is running. Call start() first.",
-                    )]));
+                    // Fallback: check persisted state for a stopped pod.
+                    match AppState::load_existing(&state.project_dir) {
+                        Some(id) => (id, true),
+                        None => {
+                            return Ok(CallToolResult::error(vec![Content::text(
+                                "No pod is running. Call start() first.",
+                            )]));
+                        }
+                    }
                 }
             }
         };
 
-        tracing::info!(pod_id = %pod_id, "Terminating pod...");
+        tracing::info!(pod_id = %pod_id, from_disk, "Terminating pod...");
 
         self.runpod
             .terminate_pod(&pod_id)
@@ -422,15 +444,19 @@ impl RemoteKernelsServer {
             .map_err(|e| McpError::internal_error(format!("Failed to terminate pod: {e}"), None))?;
 
         let mut state = self.state.lock().await;
-        state.snapshot_spend();
-        let total = state.total_spend();
+        if !from_disk {
+            state.snapshot_spend();
+        }
         if let Some(mut pod) = state.pod.take()
             && let Some(hb) = pod.heartbeat.take()
         {
             hb.stop();
         }
-        if let Err(e) = state.save(self.config.cleanup) {
-            tracing::warn!("Failed to save state: {e}");
+        // total_spend() after take(): accumulated_spend (includes snapshot) + 0 = correct.
+        let total = state.total_spend();
+        // Pod is fully deleted — clear state file.
+        if let Err(e) = state.clear() {
+            tracing::warn!("Failed to clear state: {e}");
         }
 
         Ok(CallToolResult::success(vec![Content::text(format!(
@@ -441,62 +467,100 @@ impl RemoteKernelsServer {
     /// Get the current pod status including GPU, cost, and uptime.
     #[tool(name = "status")]
     async fn status(&self, _params: Parameters<EmptyParams>) -> Result<CallToolResult, McpError> {
-        let pod_id = {
-            let state = self.state.lock().await;
-            match &state.pod {
-                Some(pod) => pod.pod_id.clone(),
-                None => {
-                    return Ok(CallToolResult::success(vec![Content::text(
-                        "No pod is currently running.",
-                    )]));
-                }
-            }
-        };
-
-        let pod = self.runpod.get_pod(&pod_id).await.map_err(|e| {
-            McpError::internal_error(format!("Failed to get pod status: {e}"), None)
-        })?;
-
+        // First check in-memory state (active pod).
         let state = self.state.lock().await;
-        let pod_state = state.pod.as_ref().expect("pod state exists");
-        let cost_per_hr = pod_state.cost_per_hr;
-        let uptime_mins = pod_state.started_at.elapsed().as_secs() / 60;
-        let total_spend = state.total_spend();
+        if let Some(ref pod_state) = state.pod {
+            let pod_id = pod_state.pod_id.clone();
+            let cost_per_hr = pod_state.cost_per_hr;
+            let uptime_mins = pod_state.started_at.elapsed().as_secs() / 60;
+            let total_spend = state.total_spend();
+            let gpu_name = pod_state.gpu_name.clone();
+            let kernel_ids = pod_state.kernel_ids.clone();
+            drop(state);
 
-        let cleanup_mode = match self.config.cleanup {
-            Cleanup::Stop => "stop",
-            Cleanup::Terminate => "terminate",
-            Cleanup::Disabled => "disabled",
-        };
+            let pod = self.runpod.get_pod(&pod_id).await.map_err(|e| {
+                McpError::internal_error(format!("Failed to get pod status: {e}"), None)
+            })?;
 
-        let mut info = format!(
-            "Pod: {}\n\
-             Status: {}\n\
-             GPU: {}\n\
-             Cost: ${cost_per_hr:.2}/hr\n\
-             Uptime: {uptime_mins} minutes\n\
-             Session cost: ${total_spend:.2}\n\
-             Cleanup: {cleanup_mode}\n\
-             Kernels: {}",
-            pod.id,
-            pod.desired_status.as_deref().unwrap_or("unknown"),
-            pod_state.gpu_name,
-            if pod_state.kernel_ids.is_empty() {
-                "none".to_string()
-            } else {
-                pod_state.kernel_ids.join(", ")
-            },
-        );
+            let cleanup_mode = match self.config.cleanup {
+                Cleanup::Stop => "stop",
+                Cleanup::Terminate => "terminate",
+                Cleanup::Disabled => "disabled",
+            };
 
-        if let Some(budget) = self.budget {
-            let remaining = budget - total_spend;
-            let _ = write!(
-                info,
-                "\nBudget: ${total_spend:.2} / ${budget:.2} (${remaining:.2} remaining)"
+            let mut info = format!(
+                "Pod: {}\n\
+                 Status: {}\n\
+                 GPU: {gpu_name}\n\
+                 Cost: ${cost_per_hr:.2}/hr\n\
+                 Uptime: {uptime_mins} minutes\n\
+                 Session cost: ${total_spend:.2}\n\
+                 Cleanup: {cleanup_mode}\n\
+                 Kernels: {}",
+                pod.id,
+                pod.desired_status.as_deref().unwrap_or("unknown"),
+                if kernel_ids.is_empty() {
+                    "none".to_string()
+                } else {
+                    kernel_ids.join(", ")
+                },
             );
+
+            if let Some(budget) = self.budget {
+                let remaining = budget - total_spend;
+                let _ = write!(
+                    info,
+                    "\nBudget: ${total_spend:.2} / ${budget:.2} (${remaining:.2} remaining)"
+                );
+            }
+
+            return Ok(CallToolResult::success(vec![Content::text(info)]));
         }
 
-        Ok(CallToolResult::success(vec![Content::text(info)]))
+        // Fallback: check persisted state for a stopped pod.
+        let project_dir = state.project_dir.clone();
+        let accumulated_spend = state.accumulated_spend;
+        drop(state);
+
+        let Some(pod_id) = AppState::load_existing(&project_dir) else {
+            return Ok(CallToolResult::success(vec![Content::text(
+                "No pod is currently running.",
+            )]));
+        };
+
+        // Query RunPod for the stopped pod's status.
+        match self.runpod.get_pod(&pod_id).await {
+            Ok(pod) => {
+                let status = pod.desired_status.as_deref().unwrap_or("unknown");
+                let mut info = format!(
+                    "Pod: {}\n\
+                     Status: {status}\n\
+                     GPU: {}\n\
+                     Session cost: ${accumulated_spend:.2}\n\
+                     Note: Pod was stopped. Use terminate() to delete it.",
+                    pod.id,
+                    pod.gpu_display_name(),
+                );
+
+                if let Some(budget) = self.budget {
+                    let remaining = budget - accumulated_spend;
+                    let _ = write!(
+                        info,
+                        "\nBudget: ${accumulated_spend:.2} / ${budget:.2} (${remaining:.2} remaining)"
+                    );
+                }
+
+                Ok(CallToolResult::success(vec![Content::text(info)]))
+            }
+            Err(e) => {
+                // Pod might have been terminated externally.
+                tracing::warn!(pod_id, error = %e, "Failed to query stopped pod");
+                Ok(CallToolResult::success(vec![Content::text(format!(
+                    "Pod {pod_id} was previously stopped but could not be queried: {e}\n\
+                     It may have been terminated externally.",
+                ))]))
+            }
+        }
     }
 
     /// Spin up an additional kernel on the running pod. Returns the new kernel ID.
@@ -1017,6 +1081,159 @@ impl RemoteKernelsServer {
         Arc::clone(&self.state)
     }
 
+    /// Try to reconnect to a pod from a previous session/crash.
+    ///
+    /// Returns `Some(Ok(...))` if reconnection succeeded, `Some(Err(...))` if
+    /// reconnection was attempted but failed, or `None` if there's no pod to
+    /// reconnect to (caller should create a new pod).
+    async fn try_reconnect(&self) -> Option<Result<CallToolResult, McpError>> {
+        let project_dir = self.state.lock().await.project_dir.clone();
+        let persisted = AppState::load_persisted(&project_dir)?;
+        let pod_id = persisted.pod_id.as_deref()?;
+        let jupyter_token = persisted.jupyter_token.as_deref()?;
+        let ssh_key_path_str = persisted.ssh_key_path.as_deref()?;
+        let ssh_key_path = std::path::PathBuf::from(ssh_key_path_str);
+
+        // Verify the SSH key file still exists.
+        if !ssh_key_path.exists() {
+            tracing::info!("Previous pod found but SSH key is missing, creating new pod");
+            return None;
+        }
+
+        // Check the pod's current status on RunPod.
+        let pod = match self.runpod.get_pod(pod_id).await {
+            Ok(pod) => pod,
+            Err(e) => {
+                // Pod doesn't exist anymore (terminated externally, etc.)
+                tracing::info!(pod_id, error = %e, "Previous pod not found on RunPod, creating new pod");
+                let state = self.state.lock().await;
+                let _ = state.clear();
+                return None;
+            }
+        };
+
+        let status = pod.desired_status.as_deref().unwrap_or("unknown");
+        tracing::info!(pod_id, status, "Found existing pod from previous session");
+
+        match status {
+            "RUNNING" => {
+                // Pod is already running — just reconnect.
+                Some(
+                    self.reconnect_to_pod(pod_id, &pod, jupyter_token, ssh_key_path)
+                        .await,
+                )
+            }
+            "EXITED" => {
+                // Pod is stopped — restart it.
+                tracing::info!(pod_id, "Restarting stopped pod...");
+                match self.runpod.resume_pod(pod_id).await {
+                    Ok(_) => {}
+                    Err(e) => {
+                        return Some(Err(McpError::internal_error(
+                            format!("Failed to restart pod {pod_id}: {e}"),
+                            None,
+                        )));
+                    }
+                }
+
+                // Wait for it to reach RUNNING status.
+                match self.wait_for_running(pod_id).await {
+                    Ok(running_pod) => Some(
+                        self.reconnect_to_pod(pod_id, &running_pod, jupyter_token, ssh_key_path)
+                            .await,
+                    ),
+                    Err(e) => Some(Err(McpError::internal_error(
+                        format!("Pod failed to restart: {e}"),
+                        None,
+                    ))),
+                }
+            }
+            _ => {
+                // Unknown status — can't reconnect, clear state and create new.
+                tracing::info!(pod_id, status, "Pod in unexpected state, creating new pod");
+                let state = self.state.lock().await;
+                let _ = state.clear();
+                None
+            }
+        }
+    }
+
+    /// Reconnect to a running pod: set up state, start heartbeat, wait for Jupyter.
+    async fn reconnect_to_pod(
+        &self,
+        pod_id: &str,
+        pod: &crate::runpod::types::Pod,
+        jupyter_token: &str,
+        ssh_key_path: std::path::PathBuf,
+    ) -> Result<CallToolResult, McpError> {
+        let gpu_name = pod.gpu_display_name().to_string();
+        let cost = pod.cost_per_hr.unwrap_or(0.0);
+        let jupyter = JupyterClient::new(pod_id, jupyter_token);
+
+        // Set up in-memory state.
+        {
+            let mut state = self.state.lock().await;
+            state.set_pod(pod, jupyter, jupyter_token.to_string(), ssh_key_path);
+            if let Err(e) = state.save(self.config.cleanup) {
+                tracing::warn!("Failed to persist state: {e}");
+            }
+        }
+
+        // Start heartbeat.
+        self.start_heartbeat(pod_id, cost).await;
+
+        // Wait for Jupyter.
+        {
+            let state = self.state.lock().await;
+            let pod_state = state.pod.as_ref().expect("pod state exists");
+            pod_state.jupyter.wait_until_ready().await.map_err(|e| {
+                McpError::internal_error(format!("Jupyter failed to start: {e}"), None)
+            })?;
+        }
+
+        let mut msg = format!(
+            "Reconnected to existing pod!\n\
+             - ID: {pod_id}\n\
+             - GPU: {gpu_name}\n\
+             - Cost: ${cost:.2}/hr\n\
+             - Status: RUNNING",
+        );
+        if let Some(budget) = self.budget {
+            let total_spend = self.state.lock().await.total_spend();
+            let remaining = budget - total_spend;
+            let _ = write!(
+                msg,
+                "\n- Budget: ${total_spend:.2} / ${budget:.2} (${remaining:.2} remaining)"
+            );
+        }
+        msg.push_str("\n\nUse create_kernel() to start a kernel.");
+        Ok(CallToolResult::success(vec![Content::text(msg)]))
+    }
+
+    /// Start the heartbeat for the current pod. Shared by create and reconnect paths.
+    async fn start_heartbeat(&self, pod_id: &str, cost_per_hr: f64) {
+        let mut state = self.state.lock().await;
+        let accumulated_spend = state.accumulated_spend;
+        if let Some(ref mut pod_state) = state.pod {
+            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+            let budget_remaining_secs = self.budget.map(|budget| {
+                let remaining_dollars = budget - accumulated_spend;
+                let secs = (remaining_dollars / cost_per_hr) * 3600.0;
+                secs.max(0.0) as u64
+            });
+
+            let hb = crate::heartbeat::start(
+                Arc::clone(&self.runpod),
+                pod_id.to_string(),
+                pod_state.ssh_key_path.clone(),
+                self.config.cleanup,
+                budget_remaining_secs,
+                self.config.startup_commands.clone(),
+            );
+            pod_state.heartbeat = Some(hb);
+        }
+    }
+
     /// Check if the session budget has been exceeded. If so, stop/terminate the pod
     /// and return an error. Returns Ok(()) if within budget or no budget is set.
     async fn check_budget(&self) -> Result<(), McpError> {
@@ -1067,7 +1284,13 @@ impl RemoteKernelsServer {
         {
             hb.stop();
         }
-        if let Err(e) = state.save(self.config.cleanup) {
+        // For stop: preserve pod_id on disk so it can be terminated later.
+        // For terminate: clear state since the pod is gone.
+        let save_result = match cleanup {
+            Cleanup::Stop => state.save_with_pod_id(Some(&pod_id), cleanup),
+            _ => state.clear(),
+        };
+        if let Err(e) = save_result {
             tracing::warn!("Failed to save state after budget cleanup: {e}");
         }
 
@@ -1101,16 +1324,6 @@ impl RemoteKernelsServer {
                 "\n[Session: ${total_spend:.2} / ${budget:.2} budget (${remaining:.2} remaining)]"
             )
         })
-    }
-
-    /// Build the startup command for the pod.
-    /// Installs rsync (not in default `RunPod` images) and runs user startup commands.
-    fn build_startup_cmd(&self) -> Vec<String> {
-        let mut parts = vec!["apt-get update -qq && apt-get install -y -qq rsync".to_string()];
-        parts.extend(self.config.startup_commands.clone());
-        // RunPod dockerStartCmd runs each element as a separate shell command.
-        // Combine into a single command so ordering is guaranteed.
-        vec![parts.join(" && ")]
     }
 
     /// Poll until the pod reaches RUNNING status.

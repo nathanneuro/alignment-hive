@@ -78,9 +78,9 @@ Tool descriptions live as doc comments on each tool method in `server.rs` (rmcp 
 ## Docker Image
 
 - MCP server only assumes Jupyter + SSH exist on the pod. All adaptation logic lives in the setup skill
-- Default: `runpod/pytorch` (has Jupyter, SSH, Python, uv — but not rsync, which must be installed via startup command)
-- Custom images: setup skill checks what's missing and generates a startup script to install prerequisites
-- Config stores image name + any custom startup commands; MCP server passes them through to RunPod API
+- Default: `runpod/pytorch` (has Jupyter, SSH, Python, uv — but not rsync)
+- Custom images: setup skill checks what's missing and generates startup commands to install prerequisites
+- `dockerStartCmd` is NOT used — it overrides the container CMD which prevents RunPod images from starting services. Instead, startup commands (rsync install + user commands from config) run via SSH after the pod is up. sync/download also ensure rsync is installed before each call.
 - RunPod official images activate Jupyter via `JUPYTER_PASSWORD` env var, SSH via `PUBLIC_KEY` env var
 - Watchdog and budget enforcement scripts injected via SSH after pod starts
 - RunPod hook mechanism: `/post_start.sh` runs after services start (for runpod/base derivatives)
@@ -92,6 +92,7 @@ Tool descriptions live as doc comments on each tool method in `server.rs` (rmcp 
 - Public IP needed for SSH heartbeat, file sync, and download. Heartbeat resolves SSH info in the background — if it never appears, heartbeat logs a warning but `start()` still succeeds. sync/download resolve SSH info on demand (blocks on first call, cached after). Default cloud type is SECURE
 - GPU type / image / volume configured via config file (Claude can override)
 - Setup skill dynamically helps users configure based on their environment, warns about inconsistent options
+- `start()` reconnects to a pod from a previous session if one exists (resumes stopped pods, reconnects to running pods). With overrides (`gpu_type`/`image`), requires terminating the existing pod first
 - v1: one pod per session. v2: multiple pods
 
 ### Pod Creation Retries
@@ -118,7 +119,7 @@ Tool descriptions live as doc comments on each tool method in `server.rs` (rmcp 
   - `[runpod]` section: passed through transparently to the RunPod pod creation API (disk sizes, cloud type, network volume, GPU count, etc.). Extra fields are converted from kebab-case to camelCase and included in the API request. Users can set any RunPod API option here without us needing to explicitly support it.
 - Claude can freely edit the config file (e.g. to fall back to a different GPU type)
 - `start()` also accepts `gpu_type` and `image` overrides for one-off changes
-- State file (`.claude/remote-kernels/state.json`) maintained by MCP server with current pod ID, cleanup mode, and accumulated spend — read by Stop hook
+- State file (`.claude/remote-kernels/state.json`) maintained by MCP server with pod ID, cleanup mode, Jupyter token, and SSH key path — read by Stop hook and used for cross-session pod reconnection
 - `.claude/remote-kernels/` auto-creates a `.gitignore` with `*`
 
 ## Pod Environment Variables
@@ -136,14 +137,14 @@ Setup skill recommends `inherit-env` by default, inspecting the project for rele
 
 - RunPod API key via environment variable `RUNPOD_API_KEY` (with .env support)
 - Jupyter token set by MCP server at pod creation
-- SSH keypair: ephemeral, generated per pod by MCP server (for rsync and heartbeat)
+- SSH keypair: generated per pod by MCP server (for rsync and heartbeat), persisted in state file for cross-session reconnection
 - Pod has auto-injected `RUNPOD_API_KEY` (pod-scoped) and `RUNPOD_POD_ID` (used by watchdog)
 
 ## Budget
 
 - Per-session budget cap via `REMOTE_KERNELS_BUDGET` environment variable (configured in `.claude/settings.json` — Claude Code's built-in guardrails prevent Claude from editing this). Can also be set via `budget-cap` in config file, but env var takes precedence
 - **Incompatible with `cleanup: disabled`** — budget enforcement requires the ability to stop/terminate the pod. MCP server rejects this combination at startup.
-- MCP server calculates spend as `hourly_rate * uptime`, accumulated across pods in state file. Monotonically increasing per session, never resets.
+- MCP server calculates spend as `hourly_rate * uptime`. Budget resets each Claude session (MCP server lifetime). Accumulated across pods within a session.
 - `execute()` responses include current spend and remaining budget when a budget is configured
 - Two enforcement layers:
   1. MCP server checks budget before `execute`, `create_kernel`, `sync`, and `download`. When exceeded: actively stops/terminates the pod (per cleanup config), then returns error.
@@ -167,7 +168,7 @@ Setup skill recommends `inherit-env` by default, inspecting the project for rele
 ### MCP server improvements
 
 - **Streaming notebook writes**: Currently notebooks are updated only when execution completes (or via `get_output`). Design intent: update the .ipynb as output streams in via the WebSocket, so the notebook reflects intermediate output during long-running executions. Requires changing `Notebook` storage to `Arc<std::sync::Mutex<Notebook>>` so the WS loop callback can safely write to it.
-- **Connect to existing pod**: `start(pod_id)` to connect to a pod not created by this session. Challenge: injecting SSH keys into a running pod. Possible approach: fetch Jupyter token from RunPod GraphQL API (`pod.env`), bootstrap SSH key via Jupyter kernel execution. Deferred until there's user demand.
+- **Connect to arbitrary pod**: `start(pod_id)` to connect to a pod not created by this MCP server instance (e.g. created manually). Challenge: injecting SSH keys into a running pod. Deferred until there's user demand. (Note: reconnecting to pods from *previous sessions* of the same MCP server is already supported — credentials are persisted in state.json.)
 - **End-to-end testing**: Integration tests that exercise the full flow — start pod, create kernel, execute, sync, download, budget enforcement, queuing, get_output, terminate. Currently no automated tests.
 
 ### Plugin and distribution

@@ -112,6 +112,27 @@ impl RunPodClient {
         Ok(())
     }
 
+    /// Resume a stopped pod. Uses `POST /pods/{podId}/start`.
+    ///
+    /// Note: `/start` resumes a stopped pod. `/restart` reboots a running pod.
+    pub async fn resume_pod(&self, pod_id: &str) -> anyhow::Result<Pod> {
+        let resp = self
+            .client
+            .post(format!("{REST_URL}/pods/{pod_id}/start"))
+            .bearer_auth(&self.api_key)
+            .send()
+            .await?;
+
+        let status = resp.status();
+        let body = resp.text().await.unwrap_or_default();
+        if !status.is_success() {
+            anyhow::bail!("RunPod API error ({status}): {body}");
+        }
+
+        tracing::debug!(%body, "Resume pod response");
+        Ok(serde_json::from_str(&body)?)
+    }
+
     pub async fn terminate_pod(&self, pod_id: &str) -> anyhow::Result<()> {
         let resp = self
             .client

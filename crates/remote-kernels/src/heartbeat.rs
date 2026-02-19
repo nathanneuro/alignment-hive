@@ -12,9 +12,10 @@ use crate::runpod::client::RunPodClient;
 /// Spawns a background task that:
 /// 1. Resolves SSH connection info via the `RunPod` GraphQL API
 /// 2. Waits for SSH to become reachable on the pod
-/// 3. Injects a watchdog process that checks `/tmp/heartbeat` every 30s
+/// 3. Runs startup commands (rsync install + user commands) via SSH
+/// 4. Injects a watchdog process that checks `/tmp/heartbeat` every 30s
 ///    and cleans up the pod if stale (>5 min)
-/// 4. Periodically touches `/tmp/heartbeat` via SSH to keep the watchdog alive
+/// 5. Periodically touches `/tmp/heartbeat` via SSH to keep the watchdog alive
 ///
 /// Returns immediately without blocking. If SSH info never becomes available
 /// (e.g. the machine has no public IP), the task logs a warning and exits.
@@ -24,6 +25,7 @@ pub fn start(
     ssh_key_path: PathBuf,
     cleanup: Cleanup,
     budget_remaining_secs: Option<u64>,
+    startup_commands: Vec<String>,
 ) -> HeartbeatState {
     let handle = tokio::spawn(async move {
         if let Err(e) = run(
@@ -32,6 +34,7 @@ pub fn start(
             &ssh_key_path,
             cleanup,
             budget_remaining_secs,
+            &startup_commands,
         )
         .await
         {
@@ -44,17 +47,22 @@ pub fn start(
     }
 }
 
-/// The main heartbeat pipeline: resolve SSH info, wait for SSH, inject watchdog,
-/// then send heartbeats.
+/// The main heartbeat pipeline: resolve SSH info, wait for SSH, run startup
+/// commands, inject watchdog, then send heartbeats.
 async fn run(
     runpod: &RunPodClient,
     pod_id: &str,
     ssh_key_path: &Path,
     cleanup: Cleanup,
     budget_remaining_secs: Option<u64>,
+    startup_commands: &[String],
 ) -> anyhow::Result<()> {
     let (ip, port) = resolve_ssh_info(runpod, pod_id).await?;
     wait_for_ssh(ssh_key_path, &ip, port).await?;
+
+    // Run startup commands (rsync install + user commands) via SSH.
+    // These run after the pod is fully up with services started.
+    run_startup_commands(ssh_key_path, &ip, port, startup_commands).await;
 
     if cleanup == Cleanup::Disabled {
         tracing::info!("Heartbeat: cleanup disabled, skipping watchdog injection");
@@ -115,6 +123,77 @@ async fn wait_for_ssh(ssh_key_path: &Path, public_ip: &str, ssh_port: u16) -> an
         }
     }
     anyhow::bail!("SSH did not become reachable after 2 minutes")
+}
+
+/// Run startup commands on the pod via SSH.
+///
+/// Always installs rsync (needed for `sync()`). Then runs any user-specified
+/// startup commands from the config.
+///
+/// Failures are logged but not fatal — the pod is still usable even if a
+/// startup command fails (sync just won't work without rsync).
+async fn run_startup_commands(
+    ssh_key_path: &Path,
+    public_ip: &str,
+    ssh_port: u16,
+    user_commands: &[String],
+) {
+    // Install rsync (not included in runpod/pytorch images).
+    let mut parts = vec!["apt-get update -qq && apt-get install -y -qq rsync".to_string()];
+    parts.extend(user_commands.iter().cloned());
+    let combined = parts.join(" && ");
+
+    tracing::info!("Heartbeat: running startup commands via SSH");
+    match ssh_cmd_long(ssh_key_path, public_ip, ssh_port, &combined).await {
+        Ok(_) => tracing::info!("Heartbeat: startup commands completed"),
+        Err(e) => tracing::warn!("Heartbeat: startup commands failed: {e}"),
+    }
+}
+
+/// Execute a potentially long-running command on the pod via SSH (120s timeout).
+async fn ssh_cmd_long(
+    ssh_key_path: &Path,
+    public_ip: &str,
+    ssh_port: u16,
+    command: &str,
+) -> anyhow::Result<String> {
+    let key_path = ssh_key_path.display().to_string();
+    let port = ssh_port.to_string();
+    let host = format!("root@{public_ip}");
+
+    let output = tokio::time::timeout(
+        std::time::Duration::from_secs(120),
+        Command::new("ssh")
+            .args([
+                "-i",
+                &key_path,
+                "-p",
+                &port,
+                "-o",
+                "StrictHostKeyChecking=no",
+                "-o",
+                "UserKnownHostsFile=/dev/null",
+                "-o",
+                "LogLevel=ERROR",
+                "-o",
+                "ConnectTimeout=5",
+                &host,
+                command,
+            ])
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .output(),
+    )
+    .await
+    .map_err(|_| anyhow::anyhow!("SSH command timed out (120s)"))?;
+
+    let output = output?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        anyhow::bail!("SSH command failed: {stderr}");
+    }
+
+    Ok(String::from_utf8_lossy(&output.stdout).to_string())
 }
 
 /// Inject the watchdog process on the pod via SSH.

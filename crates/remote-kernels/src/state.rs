@@ -23,6 +23,12 @@ pub struct PersistedState {
     /// Accumulated session spend in dollars. Monotonically increasing, never resets.
     #[serde(default)]
     pub accumulated_spend: f64,
+    /// Jupyter token for reconnecting to a pod across sessions/crashes.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub jupyter_token: Option<String>,
+    /// Path to the SSH private key for reconnecting.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ssh_key_path: Option<String>,
 }
 
 /// Runtime state held in memory by the MCP server.
@@ -61,12 +67,12 @@ impl PodState {
 
 impl AppState {
     pub fn new(project_dir: PathBuf) -> Self {
-        // Load accumulated spend from any previous state file.
-        let accumulated_spend = Self::load_accumulated_spend(&project_dir);
         Self {
             project_dir,
             pod: None,
-            accumulated_spend,
+            // Budget is per Claude session (MCP server lifetime), not per pod.
+            // Each session starts fresh.
+            accumulated_spend: 0.0,
         }
     }
 
@@ -85,23 +91,64 @@ impl AppState {
 
     /// Persist the current state to disk.
     pub fn save(&self, cleanup: Cleanup) -> anyhow::Result<()> {
+        let pod = self.pod.as_ref();
+        self.write_persisted(
+            pod.map(|p| p.pod_id.as_str()),
+            cleanup,
+            pod.map(|p| p.jupyter_token.as_str()),
+            pod.map(|p| p.ssh_key_path.display().to_string()),
+        )
+    }
+
+    /// Persist state to disk with an explicit `pod_id`.
+    ///
+    /// Used by `stop()` and graceful shutdown which need to clear the in-memory
+    /// `PodState` (to stop spend accumulation) while preserving the `pod_id` and
+    /// reconnection details on disk.
+    pub fn save_with_pod_id(&self, pod_id: Option<&str>, cleanup: Cleanup) -> anyhow::Result<()> {
+        // If the pod is still in memory, grab its reconnection details.
+        // If already taken, fall back to whatever we have from state.json.
+        let (jupyter_token, ssh_key_path) = if let Some(p) = &self.pod {
+            (
+                Some(p.jupyter_token.clone()),
+                Some(p.ssh_key_path.display().to_string()),
+            )
+        } else {
+            // Pod already taken — load reconnection details from disk.
+            let existing = Self::load_persisted(&self.project_dir);
+            (
+                existing.as_ref().and_then(|s| s.jupyter_token.clone()),
+                existing.as_ref().and_then(|s| s.ssh_key_path.clone()),
+            )
+        };
+        self.write_persisted(pod_id, cleanup, jupyter_token.as_deref(), ssh_key_path)
+    }
+
+    fn write_persisted(
+        &self,
+        pod_id: Option<&str>,
+        cleanup: Cleanup,
+        jupyter_token: Option<&str>,
+        ssh_key_path: Option<String>,
+    ) -> anyhow::Result<()> {
         let dir = self.state_dir();
         std::fs::create_dir_all(&dir)?;
 
-        // Ensure .gitignore exists so state files are never committed.
         let gitignore = dir.join(".gitignore");
         if !gitignore.exists() {
             let _ = std::fs::write(&gitignore, "*\n");
         }
 
         let persisted = PersistedState {
-            pod_id: self.pod.as_ref().map(|p| p.pod_id.clone()),
+            pod_id: pod_id.map(String::from),
             cleanup: Some(match cleanup {
                 Cleanup::Stop => "stop".to_string(),
                 Cleanup::Terminate => "terminate".to_string(),
                 Cleanup::Disabled => "disabled".to_string(),
             }),
             accumulated_spend: self.total_spend(),
+            jupyter_token: jupyter_token.map(String::from),
+            ssh_key_path,
         };
 
         let json = serde_json::to_string_pretty(&persisted)?;
@@ -153,22 +200,15 @@ impl AppState {
         });
     }
 
-    /// Load any existing state from disk (e.g. if the MCP server restarts while a pod is running).
+    /// Load the `pod_id` from a previous state file (if any).
     pub fn load_existing(project_dir: &Path) -> Option<String> {
-        let path = project_dir.join(".claude/remote-kernels/state.json");
-        let content = std::fs::read_to_string(path).ok()?;
-        let state: PersistedState = serde_json::from_str(&content).ok()?;
-        state.pod_id
+        Self::load_persisted(project_dir).and_then(|s| s.pod_id)
     }
 
-    /// Load accumulated spend from a previous state file.
-    fn load_accumulated_spend(project_dir: &Path) -> f64 {
+    /// Load the full persisted state from disk.
+    pub fn load_persisted(project_dir: &Path) -> Option<PersistedState> {
         let path = project_dir.join(".claude/remote-kernels/state.json");
-        let Ok(content) = std::fs::read_to_string(path) else {
-            return 0.0;
-        };
-        serde_json::from_str::<PersistedState>(&content)
-            .map(|s| s.accumulated_spend)
-            .unwrap_or(0.0)
+        let content = std::fs::read_to_string(path).ok()?;
+        serde_json::from_str(&content).ok()
     }
 }
