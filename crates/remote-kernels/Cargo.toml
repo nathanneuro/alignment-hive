@@ -5,6 +5,8 @@ edition = "2024"
 description = "MCP server for spinning up cloud GPU instances and interacting with persistent Jupyter kernels"
 license = "MIT"
 
+default-run = "remote-kernels"
+
 [dependencies]
 anyhow = "1.0.101"
 chrono = { version = "0.4.43", features = ["serde"] }
