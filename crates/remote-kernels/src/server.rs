@@ -671,6 +671,36 @@ impl RemoteKernelsServer {
     }
 
     #[tool(
+        name = "interrupt",
+        description = "Interrupt the currently running execution in a kernel."
+    )]
+    async fn interrupt(
+        &self,
+        params: Parameters<KernelIdParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let kernel_id = &params.0.kernel_id;
+
+        let state = self.state.lock().await;
+        let Some(pod_state) = &state.pod else {
+            return Ok(CallToolResult::error(vec![Content::text(
+                "No pod is running. Call start() first.",
+            )]));
+        };
+
+        pod_state
+            .jupyter
+            .interrupt_kernel(kernel_id)
+            .await
+            .map_err(|e| {
+                McpError::internal_error(format!("Failed to interrupt kernel: {e}"), None)
+            })?;
+
+        Ok(CallToolResult::success(vec![Content::text(format!(
+            "Kernel {kernel_id} interrupted."
+        ))]))
+    }
+
+    #[tool(
         name = "restart_kernel",
         description = "Restart a kernel (clears all state but preserves the kernel ID)."
     )]
