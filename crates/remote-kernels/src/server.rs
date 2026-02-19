@@ -9,7 +9,7 @@ use schemars::JsonSchema;
 use serde::Deserialize;
 use tokio::sync::Mutex;
 
-use crate::config::Config;
+use crate::config::{Cleanup, Config};
 use crate::descriptions;
 use crate::jupyter::rest::JupyterClient;
 use crate::runpod::client::RunPodClient;
@@ -21,6 +21,8 @@ pub struct RemoteKernelsServer {
     config: Arc<Config>,
     runpod: Arc<RunPodClient>,
     state: Arc<Mutex<AppState>>,
+    /// Effective budget cap (env var overrides config).
+    budget: Option<f64>,
     #[allow(dead_code)]
     tool_router: ToolRouter<Self>,
 }
@@ -56,8 +58,29 @@ pub struct ExecuteParams {
     pub kernel_id: String,
     /// Python code to execute.
     pub code: String,
-    /// Timeout in seconds (default: 30).
+    /// Timeout in seconds (default: 30). Set to 0 to start execution without waiting (fire-and-forget).
     pub timeout: Option<u64>,
+    /// If true, queue behind the current execution instead of returning an error when busy.
+    pub queue: Option<bool>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct GetOutputParams {
+    /// The kernel ID the execution is running on.
+    pub kernel_id: String,
+    /// The cell number returned by a timed-out `execute()` call.
+    pub cell_number: u32,
+    /// If true (default), wait for the execution to complete. If false, check without blocking.
+    pub wait: Option<bool>,
+    /// Timeout in seconds when waiting (default: 30).
+    pub timeout: Option<u64>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct SyncParams {
+    /// Extra paths to include in the sync, even if they would be excluded by .gitignore.
+    /// Paths must be relative to the project root. Absolute paths and ".." are not allowed.
+    pub include: Option<Vec<String>>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -84,11 +107,12 @@ fn generate_token() -> String {
 
 #[tool_router]
 impl RemoteKernelsServer {
-    pub fn new(config: Config, api_key: String, state: AppState) -> Self {
+    pub fn new(config: Config, api_key: String, state: AppState, budget: Option<f64>) -> Self {
         Self {
             config: Arc::new(config),
             runpod: Arc::new(RunPodClient::new(api_key)),
             state: Arc::new(Mutex::new(state)),
+            budget,
             tool_router: Self::tool_router(),
         }
     }
@@ -127,8 +151,34 @@ impl RemoteKernelsServer {
             .image
             .unwrap_or_else(|| self.config.image_name.clone());
 
-        // Merge user env with required env vars.
-        let mut env = self.config.env.clone();
+        // Build pod environment variables from all sources (later overrides earlier):
+        // 1. env-file (dotenv file)
+        // 2. inherit-env (forward from local environment)
+        // 3. [env] section (explicit key-value pairs)
+        // 4. Required vars (PUBLIC_KEY, JUPYTER_PASSWORD)
+        let mut env = std::collections::HashMap::new();
+
+        if let Some(ref env_file) = self.config.env_file {
+            let path = project_dir.join(env_file);
+            match dotenvy::from_path_iter(&path) {
+                Ok(iter) => {
+                    for (key, val) in iter.flatten() {
+                        env.insert(key, val);
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!(?path, "Failed to load env-file: {e}");
+                }
+            }
+        }
+
+        for var_name in &self.config.inherit_env {
+            if let Ok(val) = std::env::var(var_name) {
+                env.insert(var_name.clone(), val);
+            }
+        }
+
+        env.extend(self.config.env.clone());
         env.insert("PUBLIC_KEY".to_string(), ssh_keypair.public_key_openssh);
         env.insert("JUPYTER_PASSWORD".to_string(), jupyter_token.clone());
 
@@ -143,23 +193,34 @@ impl RemoteKernelsServer {
             let mut result_pod = None;
 
             for gpu_type in &gpu_type_ids {
+                let runpod = &self.config.runpod;
+                let extra = runpod
+                    .extra
+                    .iter()
+                    .map(|(k, v)| {
+                        let json_val = toml_to_json(v);
+                        (to_camel_case(k), json_val)
+                    })
+                    .collect();
+
                 let input = PodCreateInput {
                     name: self.config.name.clone(),
                     image_name: image_name.clone(),
                     gpu_type_ids: vec![gpu_type.clone()],
-                    gpu_count: Some(self.config.gpu_count),
-                    cloud_type: Some(self.config.cloud_type.clone()),
-                    container_disk_in_gb: Some(self.config.container_disk_gb),
-                    volume_in_gb: if self.config.volume_gb > 0 {
-                        Some(self.config.volume_gb)
+                    gpu_count: Some(runpod.gpu_count),
+                    cloud_type: Some(runpod.cloud_type.clone()),
+                    container_disk_in_gb: Some(runpod.container_disk_gb),
+                    volume_in_gb: if runpod.volume_gb > 0 {
+                        Some(runpod.volume_gb)
                     } else {
                         None
                     },
-                    volume_mount_path: Some(self.config.volume_mount_path.clone()),
-                    network_volume_id: self.config.network_volume_id.clone(),
+                    volume_mount_path: Some(runpod.volume_mount_path.clone()),
+                    network_volume_id: runpod.network_volume_id.clone(),
                     ports: Some(vec!["8888/http".to_string(), "22/tcp".to_string()]),
                     env: Some(env.clone()),
                     docker_start_cmd: Some(self.build_startup_cmd()),
+                    extra,
                 };
 
                 tracing::info!(gpu_type = %gpu_type, "Trying GPU type...");
@@ -244,12 +305,22 @@ impl RemoteKernelsServer {
         // internally — does not block start().
         {
             let mut state = self.state.lock().await;
+            let accumulated_spend = state.accumulated_spend;
             if let Some(ref mut pod_state) = state.pod {
+                // Calculate remaining budget time for pod-side enforcement.
+                #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+                let budget_remaining_secs = self.budget.map(|budget| {
+                    let remaining_dollars = budget - accumulated_spend;
+                    let secs = (remaining_dollars / cost) * 3600.0;
+                    secs.max(0.0) as u64
+                });
+
                 let hb = crate::heartbeat::start(
                     Arc::clone(&self.runpod),
                     created_pod.id.clone(),
                     pod_state.ssh_key_path.clone(),
                     self.config.cleanup,
+                    budget_remaining_secs,
                 );
                 pod_state.heartbeat = Some(hb);
             }
@@ -264,20 +335,28 @@ impl RemoteKernelsServer {
             })?;
         }
 
-        Ok(CallToolResult::success(vec![Content::text(format!(
+        let mut msg = format!(
             "Pod started successfully!\n\
              - ID: {}\n\
              - GPU: {gpu_name}\n\
              - Cost: ${cost:.2}/hr\n\
-             - Status: RUNNING\n\
-             \n\
-             Use create_kernel() to start a kernel.",
+             - Status: RUNNING",
             created_pod.id,
-        ))]))
+        );
+        if let Some(budget) = self.budget {
+            let total_spend = self.state.lock().await.total_spend();
+            let remaining = budget - total_spend;
+            let _ = write!(
+                msg,
+                "\n- Budget: ${total_spend:.2} / ${budget:.2} (${remaining:.2} remaining)"
+            );
+        }
+        msg.push_str("\n\nUse create_kernel() to start a kernel.");
+        Ok(CallToolResult::success(vec![Content::text(msg)]))
     }
 
     /// Stop the running pod. The pod is preserved and can be restarted (storage costs still apply).
-    /// Use terminate() to fully delete it.
+    /// Use `terminate()` to fully delete it.
     #[tool(name = "stop")]
     async fn stop(&self, _params: Parameters<EmptyParams>) -> Result<CallToolResult, McpError> {
         let pod_id = {
@@ -300,26 +379,19 @@ impl RemoteKernelsServer {
             .map_err(|e| McpError::internal_error(format!("Failed to stop pod: {e}"), None))?;
 
         let mut state = self.state.lock().await;
-        let elapsed = state
-            .pod
-            .as_ref()
-            .map(|p| p.started_at.elapsed())
-            .unwrap_or_default();
-        let cost = state
-            .pod
-            .as_ref()
-            .map_or(0.0, |p| p.cost_per_hr * elapsed.as_secs_f64() / 3600.0);
+        state.snapshot_spend();
+        let total = state.total_spend();
         if let Some(mut pod) = state.pod.take()
             && let Some(hb) = pod.heartbeat.take()
         {
             hb.stop();
         }
-        if let Err(e) = state.clear() {
-            tracing::warn!("Failed to clear state file: {e}");
+        if let Err(e) = state.save(self.config.cleanup) {
+            tracing::warn!("Failed to save state: {e}");
         }
 
         Ok(CallToolResult::success(vec![Content::text(format!(
-            "Pod {pod_id} stopped. Session cost: ${cost:.2}. The pod is preserved and can be restarted from the RunPod dashboard.",
+            "Pod {pod_id} stopped. Session cost: ${total:.2}. The pod is preserved and can be restarted from the RunPod dashboard.",
         ))]))
     }
 
@@ -350,26 +422,19 @@ impl RemoteKernelsServer {
             .map_err(|e| McpError::internal_error(format!("Failed to terminate pod: {e}"), None))?;
 
         let mut state = self.state.lock().await;
-        let elapsed = state
-            .pod
-            .as_ref()
-            .map(|p| p.started_at.elapsed())
-            .unwrap_or_default();
-        let cost = state
-            .pod
-            .as_ref()
-            .map_or(0.0, |p| p.cost_per_hr * elapsed.as_secs_f64() / 3600.0);
+        state.snapshot_spend();
+        let total = state.total_spend();
         if let Some(mut pod) = state.pod.take()
             && let Some(hb) = pod.heartbeat.take()
         {
             hb.stop();
         }
-        if let Err(e) = state.clear() {
-            tracing::warn!("Failed to clear state file: {e}");
+        if let Err(e) = state.save(self.config.cleanup) {
+            tracing::warn!("Failed to save state: {e}");
         }
 
         Ok(CallToolResult::success(vec![Content::text(format!(
-            "Pod {pod_id} terminated. Session cost: ${cost:.2}. All pod data has been deleted.",
+            "Pod {pod_id} terminated. Session cost: ${total:.2}. All pod data has been deleted.",
         ))]))
     }
 
@@ -394,10 +459,15 @@ impl RemoteKernelsServer {
 
         let state = self.state.lock().await;
         let pod_state = state.pod.as_ref().expect("pod state exists");
-        let elapsed = pod_state.started_at.elapsed();
-        let session_cost = pod_state.cost_per_hr * elapsed.as_secs_f64() / 3600.0;
         let cost_per_hr = pod_state.cost_per_hr;
-        let uptime_mins = elapsed.as_secs() / 60;
+        let uptime_mins = pod_state.started_at.elapsed().as_secs() / 60;
+        let total_spend = state.total_spend();
+
+        let cleanup_mode = match self.config.cleanup {
+            Cleanup::Stop => "stop",
+            Cleanup::Terminate => "terminate",
+            Cleanup::Disabled => "disabled",
+        };
 
         let mut info = format!(
             "Pod: {}\n\
@@ -405,7 +475,8 @@ impl RemoteKernelsServer {
              GPU: {}\n\
              Cost: ${cost_per_hr:.2}/hr\n\
              Uptime: {uptime_mins} minutes\n\
-             Session cost: ${session_cost:.2}\n\
+             Session cost: ${total_spend:.2}\n\
+             Cleanup: {cleanup_mode}\n\
              Kernels: {}",
             pod.id,
             pod.desired_status.as_deref().unwrap_or("unknown"),
@@ -417,11 +488,11 @@ impl RemoteKernelsServer {
             },
         );
 
-        if let Some(cap) = self.config.budget_cap {
-            let remaining = cap - session_cost;
+        if let Some(budget) = self.budget {
+            let remaining = budget - total_spend;
             let _ = write!(
                 info,
-                "\nBudget: ${session_cost:.2} / ${cap:.2} (${remaining:.2} remaining)"
+                "\nBudget: ${total_spend:.2} / ${budget:.2} (${remaining:.2} remaining)"
             );
         }
 
@@ -434,6 +505,7 @@ impl RemoteKernelsServer {
         &self,
         params: Parameters<CreateKernelParams>,
     ) -> Result<CallToolResult, McpError> {
+        self.check_budget().await?;
         let name = params.0.name;
 
         let state = self.state.lock().await;
@@ -462,72 +534,179 @@ impl RemoteKernelsServer {
                 )
             })?;
 
-        {
+        let notebook_path = {
             let mut state = self.state.lock().await;
-            let project_dir = state.project_dir.clone();
+            let notebook_dir = state.project_dir.join(&self.config.notebook_dir);
+            let mut nb_path = None;
             if let Some(ref mut pod) = state.pod {
                 pod.kernel_ids.push(kernel_id.clone());
                 pod.kernel_connections.insert(kernel_id.clone(), conn);
 
                 if let Ok(nb) =
-                    crate::notebook::Notebook::new(&project_dir, &kernel_id, name.as_deref())
+                    crate::notebook::Notebook::new(&notebook_dir, &kernel_id, name.as_deref())
                 {
+                    nb_path = Some(nb.path().to_path_buf());
                     pod.notebooks.insert(kernel_id.clone(), nb);
                 }
             }
-        }
+            nb_path
+        };
 
         let label = match &name {
             Some(n) => format!("{kernel_id} ({n})"),
             None => kernel_id.clone(),
         };
-        Ok(CallToolResult::success(vec![Content::text(format!(
-            "Kernel created: {label}"
-        ))]))
+        let mut msg = format!("Kernel created: {label}");
+        if let Some(path) = notebook_path {
+            let _ = write!(msg, "\nNotebook: {}", path.display());
+        }
+        Ok(CallToolResult::success(vec![Content::text(msg)]))
     }
 
     /// Execute Python code in a Jupyter kernel. Returns the output (stdout, stderr, result, errors).
     /// For long-running code, consider using a reasonable timeout.
     #[tool(name = "execute")]
     async fn execute(&self, params: Parameters<ExecuteParams>) -> Result<CallToolResult, McpError> {
+        self.check_budget().await?;
+
         let params = params.0;
         let timeout_secs = params.timeout.unwrap_or(30);
-        let timeout = std::time::Duration::from_secs(timeout_secs);
+        let queue = params.queue.unwrap_or(false);
 
-        let mut state = self.state.lock().await;
-        let Some(pod_state) = &mut state.pod else {
-            return Ok(CallToolResult::error(vec![Content::text(
-                "No pod is running. Call start() first.",
-            )]));
-        };
+        let (mut result_rx, cell_number, kernel_id) = {
+            let mut state = self.state.lock().await;
+            let Some(pod_state) = &mut state.pod else {
+                return Ok(CallToolResult::error(vec![Content::text(
+                    "No pod is running. Call start() first.",
+                )]));
+            };
 
-        let Some(conn) = pod_state.kernel_connections.get(&params.kernel_id) else {
-            let available: Vec<_> = pod_state.kernel_ids.clone();
-            return Ok(CallToolResult::error(vec![Content::text(format!(
-                "Kernel {} not found. Available kernels: {}",
-                params.kernel_id,
-                if available.is_empty() {
-                    "none".to_string()
-                } else {
-                    available.join(", ")
+            let Some(conn) = pod_state.kernel_connections.get(&params.kernel_id) else {
+                let available: Vec<_> = pod_state.kernel_ids.clone();
+                return Ok(CallToolResult::error(vec![Content::text(format!(
+                    "Kernel {} not found. Available kernels: {}",
+                    params.kernel_id,
+                    if available.is_empty() {
+                        "none".to_string()
+                    } else {
+                        available.join(", ")
+                    }
+                ))]));
+            };
+
+            // Check if kernel is busy.
+            if conn.is_busy() && !queue {
+                return Ok(CallToolResult::error(vec![Content::text(
+                    "Kernel is busy. Use queue=true to wait, or interrupt() to cancel the current execution.",
+                )]));
+            }
+
+            // Create notebook cell placeholder.
+            let cell_number = if let Some(nb) = pod_state.notebooks.get_mut(&params.kernel_id) {
+                match nb.append_cell_placeholder(&params.code) {
+                    Ok(n) => Some(n),
+                    Err(e) => {
+                        tracing::warn!("Failed to create notebook cell: {e}");
+                        None
+                    }
                 }
-            ))]));
+            } else {
+                None
+            };
+
+            let session_id = pod_state.session_id.clone();
+            let kernel_id = params.kernel_id.clone();
+
+            let rx = conn
+                .start_execution(&session_id, &params.code)
+                .await
+                .map_err(|e| McpError::internal_error(format!("Execution failed: {e}"), None))?;
+
+            // Fire-and-forget: store receiver and return immediately.
+            if timeout_secs == 0 {
+                if let Some(cell_num) = cell_number {
+                    pod_state
+                        .pending_executions
+                        .insert((kernel_id.clone(), cell_num), rx);
+                }
+
+                let mut msg = String::from("Execution started (fire-and-forget).");
+                if let Some(cell_num) = cell_number {
+                    let _ = write!(
+                        msg,
+                        "\nCell number: {cell_num}\nUse get_output(kernel_id=\"{kernel_id}\", cell_number={cell_num}) to check on it."
+                    );
+                }
+                return Ok(CallToolResult::success(vec![Content::text(msg)]));
+            }
+
+            (rx, cell_number, kernel_id)
         };
+        // State lock dropped here — we can await freely.
 
-        let output = conn
-            .execute(&pod_state.session_id, &params.code, timeout)
-            .await
-            .map_err(|e| McpError::internal_error(format!("Execution failed: {e}"), None))?;
+        // Wait for result with timeout. Using select! so we can store the receiver on timeout.
+        let timeout = std::time::Duration::from_secs(timeout_secs);
+        let timed_out;
+        let mut completed_output = None;
 
-        // Auto-save to notebook.
-        if let Some(nb) = pod_state.notebooks.get_mut(&params.kernel_id)
-            && let Err(e) = nb.append_cell(&params.code, &output)
-        {
-            tracing::warn!("Failed to save notebook cell: {e}");
+        tokio::select! {
+            result = &mut result_rx => {
+                timed_out = false;
+                completed_output = result.ok();
+            }
+            () = tokio::time::sleep(timeout) => {
+                timed_out = true;
+            }
         }
 
-        let formatted = output.format();
+        if timed_out {
+            // Store receiver for get_output().
+            if let Some(cell_num) = cell_number {
+                let mut state = self.state.lock().await;
+                if let Some(pod_state) = &mut state.pod {
+                    pod_state
+                        .pending_executions
+                        .insert((kernel_id.clone(), cell_num), result_rx);
+                }
+            }
+
+            let mut msg =
+                format!("Execution timed out after {timeout_secs}s. The code is still running.");
+            if let Some(cell_num) = cell_number {
+                let _ = write!(
+                    msg,
+                    "\nCell number: {cell_num}\nUse get_output(kernel_id=\"{kernel_id}\", cell_number={cell_num}) to check on it."
+                );
+            }
+            return Ok(CallToolResult::success(vec![Content::text(msg)]));
+        }
+
+        let Some(output) = completed_output else {
+            return Err(McpError::internal_error(
+                "Kernel connection dropped before execution completed",
+                None,
+            ));
+        };
+
+        // Update notebook with final output.
+        if let Some(cell_num) = cell_number {
+            self.update_notebook_cell(&kernel_id, cell_num, &output)
+                .await;
+        }
+
+        let mut formatted = output.format();
         let is_error = output.error.is_some();
+
+        // Append spend/budget info and cleanup reminder.
+        let total_spend = self.state.lock().await.total_spend();
+        if let Some(spend_line) = self.format_spend_line(total_spend) {
+            formatted.push_str(&spend_line);
+        }
+        if self.config.cleanup == Cleanup::Disabled {
+            formatted.push_str(
+                "\nNote: automatic cleanup is disabled. Remember to stop/terminate the pod when done.",
+            );
+        }
 
         if is_error {
             Ok(CallToolResult::error(vec![Content::text(formatted)]))
@@ -536,10 +715,133 @@ impl RemoteKernelsServer {
         }
     }
 
+    /// Check on or wait for a previously started execution that timed out.
+    /// The `cell_number` is returned by `execute()` when it times out or when timeout=0 is used.
+    #[tool(name = "get_output")]
+    async fn get_output(
+        &self,
+        params: Parameters<GetOutputParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let params = params.0;
+        let wait = params.wait.unwrap_or(true);
+        let timeout_secs = params.timeout.unwrap_or(30);
+
+        let mut result_rx = {
+            let mut state = self.state.lock().await;
+            let Some(pod_state) = &mut state.pod else {
+                return Ok(CallToolResult::error(vec![Content::text(
+                    "No pod is running.",
+                )]));
+            };
+
+            let key = (params.kernel_id.clone(), params.cell_number);
+            let Some(rx) = pod_state.pending_executions.remove(&key) else {
+                return Ok(CallToolResult::error(vec![Content::text(format!(
+                    "No pending execution found for kernel {} cell {}. It may have already completed.",
+                    params.kernel_id, params.cell_number
+                ))]));
+            };
+            rx
+        };
+
+        if wait {
+            // Wait with timeout, using select! to preserve the receiver.
+            let timeout = std::time::Duration::from_secs(timeout_secs);
+            let timed_out;
+            let mut completed_output = None;
+
+            tokio::select! {
+                result = &mut result_rx => {
+                    timed_out = false;
+                    completed_output = result.ok();
+                }
+                () = tokio::time::sleep(timeout) => {
+                    timed_out = true;
+                }
+            }
+
+            if timed_out {
+                // Put it back.
+                let mut state = self.state.lock().await;
+                if let Some(pod_state) = &mut state.pod {
+                    pod_state
+                        .pending_executions
+                        .insert((params.kernel_id, params.cell_number), result_rx);
+                }
+                return Ok(CallToolResult::success(vec![Content::text(format!(
+                    "Execution still running after {timeout_secs}s. Use get_output() again to check.",
+                ))]));
+            }
+
+            match completed_output {
+                Some(output) => {
+                    self.update_notebook_cell(&params.kernel_id, params.cell_number, &output)
+                        .await;
+                    let formatted = output.format();
+                    let is_error = output.error.is_some();
+                    if is_error {
+                        Ok(CallToolResult::error(vec![Content::text(formatted)]))
+                    } else {
+                        Ok(CallToolResult::success(vec![Content::text(formatted)]))
+                    }
+                }
+                None => Ok(CallToolResult::error(vec![Content::text(
+                    "Kernel connection was lost.",
+                )])),
+            }
+        } else {
+            // Non-blocking check.
+            match result_rx.try_recv() {
+                Ok(output) => {
+                    self.update_notebook_cell(&params.kernel_id, params.cell_number, &output)
+                        .await;
+                    let formatted = output.format();
+                    let is_error = output.error.is_some();
+                    if is_error {
+                        Ok(CallToolResult::error(vec![Content::text(formatted)]))
+                    } else {
+                        Ok(CallToolResult::success(vec![Content::text(formatted)]))
+                    }
+                }
+                Err(tokio::sync::oneshot::error::TryRecvError::Empty) => {
+                    // Put it back.
+                    let mut state = self.state.lock().await;
+                    if let Some(pod_state) = &mut state.pod {
+                        pod_state
+                            .pending_executions
+                            .insert((params.kernel_id, params.cell_number), result_rx);
+                    }
+                    Ok(CallToolResult::success(vec![Content::text(
+                        "Execution is still running.",
+                    )]))
+                }
+                Err(tokio::sync::oneshot::error::TryRecvError::Closed) => Ok(
+                    CallToolResult::error(vec![Content::text("Kernel connection was lost.")]),
+                ),
+            }
+        }
+    }
+
     /// Sync local project files to the running pod via rsync over SSH. Respects .gitignore.
     /// Requires the pod to have a public IP (may not work on all community cloud machines).
     #[tool(name = "sync")]
-    async fn sync(&self, _params: Parameters<EmptyParams>) -> Result<CallToolResult, McpError> {
+    async fn sync(&self, params: Parameters<SyncParams>) -> Result<CallToolResult, McpError> {
+        self.check_budget().await?;
+        let params = params.0;
+
+        // Validate include paths: must be relative, no ".." components.
+        let mut includes: Vec<String> = self.config.sync_include.clone();
+        if let Some(extra) = params.include {
+            includes.extend(extra);
+        }
+        for path in &includes {
+            if path.starts_with('/') || path.contains("..") {
+                return Ok(CallToolResult::error(vec![Content::text(format!(
+                    "Invalid include path: {path:?}. Paths must be relative to the project root. Absolute paths and '..' are not allowed.",
+                ))]));
+            }
+        }
+
         let (project_dir, ssh_key_path) = {
             let state = self.state.lock().await;
             let Some(pod_state) = &state.pod else {
@@ -551,7 +853,7 @@ impl RemoteKernelsServer {
         };
 
         let (public_ip, ssh_port) = self.get_ssh_info().await?;
-        let volume_mount = self.config.volume_mount_path.clone();
+        let volume_mount = self.config.runpod.volume_mount_path.clone();
 
         let result = crate::sync::sync_to_pod(
             &project_dir,
@@ -559,6 +861,7 @@ impl RemoteKernelsServer {
             &public_ip,
             ssh_port,
             &volume_mount,
+            &includes,
         )
         .await
         .map_err(|e| McpError::internal_error(format!("Sync failed: {e}"), None))?;
@@ -572,6 +875,7 @@ impl RemoteKernelsServer {
         &self,
         params: Parameters<DownloadParams>,
     ) -> Result<CallToolResult, McpError> {
+        self.check_budget().await?;
         let params = params.0;
 
         let ssh_key_path = {
@@ -674,8 +978,8 @@ impl RemoteKernelsServer {
     ) -> Result<CallToolResult, McpError> {
         let kernel_id = &params.0.kernel_id;
 
-        let state = self.state.lock().await;
-        let Some(pod_state) = &state.pod else {
+        let mut state = self.state.lock().await;
+        let Some(pod_state) = &mut state.pod else {
             return Ok(CallToolResult::error(vec![Content::text(
                 "No pod is running. Call start() first.",
             )]));
@@ -689,9 +993,21 @@ impl RemoteKernelsServer {
                 McpError::internal_error(format!("Failed to restart kernel: {e}"), None)
             })?;
 
-        Ok(CallToolResult::success(vec![Content::text(format!(
-            "Kernel {kernel_id} restarted."
-        ))]))
+        // Create a new notebook file for the restarted kernel (old one is preserved as history).
+        let notebook_dir = state.project_dir.join(&self.config.notebook_dir);
+        let mut notebook_path = None;
+        if let Some(ref mut pod) = state.pod
+            && let Ok(nb) = crate::notebook::Notebook::new(&notebook_dir, kernel_id, None)
+        {
+            notebook_path = Some(nb.path().to_path_buf());
+            pod.notebooks.insert(kernel_id.clone(), nb);
+        }
+
+        let mut msg = format!("Kernel {kernel_id} restarted.");
+        if let Some(path) = notebook_path {
+            let _ = write!(msg, "\nNew notebook: {}", path.display());
+        }
+        Ok(CallToolResult::success(vec![Content::text(msg)]))
     }
 }
 
@@ -701,8 +1017,94 @@ impl RemoteKernelsServer {
         Arc::clone(&self.state)
     }
 
+    /// Check if the session budget has been exceeded. If so, stop/terminate the pod
+    /// and return an error. Returns Ok(()) if within budget or no budget is set.
+    async fn check_budget(&self) -> Result<(), McpError> {
+        let Some(budget) = self.budget else {
+            return Ok(());
+        };
+
+        let total_spend = self.state.lock().await.total_spend();
+        if total_spend < budget {
+            return Ok(());
+        }
+
+        // Budget exceeded — actively clean up the pod.
+        let action = self.cleanup_pod_for_budget().await;
+        Err(McpError::internal_error(
+            format!("Session budget of ${budget:.2} reached (spent ${total_spend:.2}). {action}"),
+            None,
+        ))
+    }
+
+    /// Stop or terminate the pod due to budget being exceeded.
+    /// Returns a human-readable description of what happened.
+    async fn cleanup_pod_for_budget(&self) -> String {
+        let pod_id = {
+            let state = self.state.lock().await;
+            match &state.pod {
+                Some(p) => p.pod_id.clone(),
+                None => return "No pod was running.".to_string(),
+            }
+        };
+
+        // Budget + Disabled is rejected at startup, so Disabled is unreachable here.
+        let cleanup = self.config.cleanup;
+        let result = match cleanup {
+            Cleanup::Terminate | Cleanup::Disabled => self.runpod.terminate_pod(&pod_id).await,
+            Cleanup::Stop => self.runpod.stop_pod(&pod_id).await,
+        };
+
+        let action_word = match cleanup {
+            Cleanup::Stop => "stopped",
+            _ => "terminated",
+        };
+
+        let mut state = self.state.lock().await;
+        state.snapshot_spend();
+        if let Some(mut pod) = state.pod.take()
+            && let Some(hb) = pod.heartbeat.take()
+        {
+            hb.stop();
+        }
+        if let Err(e) = state.save(self.config.cleanup) {
+            tracing::warn!("Failed to save state after budget cleanup: {e}");
+        }
+
+        match result {
+            Ok(()) => format!("Pod has been {action_word}."),
+            Err(e) => format!("Attempted to {action_word} pod but failed: {e}"),
+        }
+    }
+
+    /// Update a notebook cell with the final execution output.
+    async fn update_notebook_cell(
+        &self,
+        kernel_id: &str,
+        cell_number: u32,
+        output: &crate::jupyter::messages::ExecutionOutput,
+    ) {
+        let mut state = self.state.lock().await;
+        if let Some(pod_state) = &mut state.pod
+            && let Some(nb) = pod_state.notebooks.get_mut(kernel_id)
+            && let Err(e) = nb.update_cell_output(cell_number, output)
+        {
+            tracing::warn!("Failed to update notebook cell: {e}");
+        }
+    }
+
+    /// Format a spend/budget line for tool responses.
+    fn format_spend_line(&self, total_spend: f64) -> Option<String> {
+        self.budget.map(|budget| {
+            let remaining = budget - total_spend;
+            format!(
+                "\n[Session: ${total_spend:.2} / ${budget:.2} budget (${remaining:.2} remaining)]"
+            )
+        })
+    }
+
     /// Build the startup command for the pod.
-    /// Installs rsync (not in default RunPod images) and runs user startup commands.
+    /// Installs rsync (not in default `RunPod` images) and runs user startup commands.
     fn build_startup_cmd(&self) -> Vec<String> {
         let mut parts = vec!["apt-get update -qq && apt-get install -y -qq rsync".to_string()];
         parts.extend(self.config.startup_commands.clone());
@@ -800,6 +1202,42 @@ impl RemoteKernelsServer {
 
         Ok((ip, port))
     }
+}
+
+/// Convert a TOML value to a JSON value for API passthrough.
+fn toml_to_json(value: &toml::Value) -> serde_json::Value {
+    match value {
+        toml::Value::String(s) => serde_json::Value::String(s.clone()),
+        toml::Value::Integer(i) => serde_json::json!(i),
+        toml::Value::Float(f) => serde_json::json!(f),
+        toml::Value::Boolean(b) => serde_json::Value::Bool(*b),
+        toml::Value::Array(arr) => serde_json::Value::Array(arr.iter().map(toml_to_json).collect()),
+        toml::Value::Table(table) => {
+            let map = table
+                .iter()
+                .map(|(k, v)| (to_camel_case(k), toml_to_json(v)))
+                .collect();
+            serde_json::Value::Object(map)
+        }
+        toml::Value::Datetime(dt) => serde_json::Value::String(dt.to_string()),
+    }
+}
+
+/// Convert kebab-case to camelCase for `RunPod` API field names.
+fn to_camel_case(s: &str) -> String {
+    let mut result = String::with_capacity(s.len());
+    let mut capitalize_next = false;
+    for c in s.chars() {
+        if c == '-' {
+            capitalize_next = true;
+        } else if capitalize_next {
+            result.extend(c.to_uppercase());
+            capitalize_next = false;
+        } else {
+            result.push(c);
+        }
+    }
+    result
 }
 
 #[tool_handler]

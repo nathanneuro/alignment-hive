@@ -1,3 +1,6 @@
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+
 use futures::{SinkExt, StreamExt};
 use tokio::sync::{mpsc, oneshot};
 use tokio_tungstenite::tungstenite::Message;
@@ -8,6 +11,8 @@ use super::messages::{ExecutionOutput, ExecutionStatus, JupyterMessage};
 pub struct KernelConnection {
     /// Send execute requests.
     request_tx: mpsc::Sender<ExecuteCommand>,
+    /// Whether the kernel is currently executing code.
+    is_busy: Arc<AtomicBool>,
     /// Background reader task handle.
     _reader_handle: tokio::task::JoinHandle<()>,
 }
@@ -30,18 +35,70 @@ impl KernelConnection {
         let (ws_sink, ws_stream_rx) = ws_stream.split();
 
         let (request_tx, request_rx) = mpsc::channel::<ExecuteCommand>(16);
+        let is_busy = Arc::new(AtomicBool::new(false));
 
-        let reader_handle = tokio::spawn(Self::run_ws_loop(ws_sink, ws_stream_rx, request_rx));
+        let reader_handle = tokio::spawn(Self::run_ws_loop(
+            ws_sink,
+            ws_stream_rx,
+            request_rx,
+            Arc::clone(&is_busy),
+        ));
 
         tracing::info!(%kernel_id, "Connected to kernel WebSocket");
 
         Ok(Self {
             request_tx,
+            is_busy,
             _reader_handle: reader_handle,
         })
     }
 
+    /// Check if the kernel is currently executing code.
+    pub fn is_busy(&self) -> bool {
+        self.is_busy.load(Ordering::Relaxed)
+    }
+
+    /// Start an execution without waiting for the result.
+    /// Returns a receiver that will yield the final `ExecutionOutput` when complete.
+    pub async fn start_execution(
+        &self,
+        session_id: &str,
+        code: &str,
+    ) -> anyhow::Result<oneshot::Receiver<ExecutionOutput>> {
+        let msg = JupyterMessage::execute_request(session_id, code);
+        let (result_tx, result_rx) = oneshot::channel();
+
+        self.request_tx
+            .send(ExecuteCommand { msg, result_tx })
+            .await
+            .map_err(|_| anyhow::anyhow!("Kernel connection closed"))?;
+
+        Ok(result_rx)
+    }
+
+    /// Execute code and wait for the result with a timeout.
+    pub async fn execute(
+        &self,
+        session_id: &str,
+        code: &str,
+        timeout: std::time::Duration,
+    ) -> anyhow::Result<ExecutionOutput> {
+        let result_rx = self.start_execution(session_id, code).await?;
+
+        match tokio::time::timeout(timeout, result_rx).await {
+            Ok(Ok(output)) => Ok(output),
+            Ok(Err(_)) => anyhow::bail!("Kernel connection dropped before execution completed"),
+            Err(_) => Ok(ExecutionOutput {
+                stderr: "Execution timed out. The code may still be running on the kernel."
+                    .to_string(),
+                ..Default::default()
+            }),
+        }
+    }
+
     /// Background task: handles sending requests and reading responses.
+    /// Only accepts new requests when no execution is pending (select guard).
+    /// Messages queue in the mpsc channel until the current execution completes.
     #[allow(clippy::too_many_lines)]
     async fn run_ws_loop(
         mut ws_sink: futures::stream::SplitSink<
@@ -56,12 +113,15 @@ impl KernelConnection {
             >,
         >,
         mut request_rx: mpsc::Receiver<ExecuteCommand>,
+        is_busy: Arc<AtomicBool>,
     ) {
         let mut pending: Option<(String, ExecutionOutput, oneshot::Sender<ExecutionOutput>)> = None;
 
         loop {
             tokio::select! {
-                Some(cmd) = request_rx.recv() => {
+                // Only accept new requests when no execution is pending.
+                // This prevents clobbering a pending result — messages queue in the channel.
+                Some(cmd) = request_rx.recv(), if pending.is_none() => {
                     let msg_id = cmd.msg.header.msg_id.clone();
                     let json = match serde_json::to_string(&cmd.msg) {
                         Ok(j) => j,
@@ -78,6 +138,7 @@ impl KernelConnection {
                         continue;
                     }
 
+                    is_busy.store(true, Ordering::Relaxed);
                     pending = Some((msg_id, ExecutionOutput::default(), cmd.result_tx));
                 }
 
@@ -124,6 +185,7 @@ impl KernelConnection {
                                     output.status = ExecutionStatus::Complete;
                                 }
 
+                                is_busy.store(false, Ordering::Relaxed);
                                 if let Some((_, output, tx)) = pending.take() {
                                     let _ = tx.send(output);
                                 }
@@ -138,6 +200,7 @@ impl KernelConnection {
         }
 
         // If we exit with a pending execution, complete it with what we have.
+        is_busy.store(false, Ordering::Relaxed);
         if let Some((_, mut output, tx)) = pending.take() {
             if output.status == ExecutionStatus::Running {
                 output.status = ExecutionStatus::Errored;
@@ -146,32 +209,6 @@ impl KernelConnection {
                     .push_str("\nWebSocket connection closed unexpectedly.");
             }
             let _ = tx.send(output);
-        }
-    }
-
-    /// Execute code and wait for the result.
-    pub async fn execute(
-        &self,
-        session_id: &str,
-        code: &str,
-        timeout: std::time::Duration,
-    ) -> anyhow::Result<ExecutionOutput> {
-        let msg = JupyterMessage::execute_request(session_id, code);
-        let (result_tx, result_rx) = oneshot::channel();
-
-        self.request_tx
-            .send(ExecuteCommand { msg, result_tx })
-            .await
-            .map_err(|_| anyhow::anyhow!("Kernel connection closed"))?;
-
-        match tokio::time::timeout(timeout, result_rx).await {
-            Ok(Ok(output)) => Ok(output),
-            Ok(Err(_)) => anyhow::bail!("Kernel connection dropped before execution completed"),
-            Err(_) => Ok(ExecutionOutput {
-                stderr: "Execution timed out. The code may still be running on the kernel."
-                    .to_string(),
-                ..Default::default()
-            }),
         }
     }
 }

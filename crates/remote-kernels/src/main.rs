@@ -39,9 +39,26 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let config = config::Config::load(&project_dir)?;
     let cleanup = config.cleanup;
+
+    // Budget: env var overrides config. Env var is typically set via .claude/settings.json
+    // so Claude can't modify it.
+    let budget = std::env::var("REMOTE_KERNELS_BUDGET")
+        .ok()
+        .and_then(|v| v.parse::<f64>().ok())
+        .or(config.budget_cap);
+
+    // Budget and cleanup:disabled are incompatible — disabled means the user wants the
+    // pod to keep running, which conflicts with budget enforcement stopping/terminating it.
+    if budget.is_some() && cleanup == config::Cleanup::Disabled {
+        return Err(
+            "Configuration error: budget-cap (or REMOTE_KERNELS_BUDGET) cannot be used with cleanup = \"disabled\". \
+             Budget enforcement requires the ability to stop/terminate the pod.".into()
+        );
+    }
+
     let app_state = state::AppState::new(project_dir);
 
-    let server = server::RemoteKernelsServer::new(config, api_key.clone(), app_state);
+    let server = server::RemoteKernelsServer::new(config, api_key.clone(), app_state, budget);
     let shared_state = server.shared_state();
 
     tracing::info!("Starting remote-kernels MCP server");
@@ -64,14 +81,24 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
 
         // Stop or terminate the pod based on config.
-        let runpod = runpod::client::RunPodClient::new(api_key);
-        let result = match cleanup {
-            config::Cleanup::Stop => runpod.stop_pod(&pod.pod_id).await,
-            config::Cleanup::Terminate => runpod.terminate_pod(&pod.pod_id).await,
-        };
-        match result {
-            Ok(()) => tracing::info!(pod_id = %pod.pod_id, ?cleanup, "Pod cleaned up"),
-            Err(e) => tracing::warn!(pod_id = %pod.pod_id, "Failed to clean up pod: {e}"),
+        match cleanup {
+            config::Cleanup::Disabled => {
+                tracing::info!(pod_id = %pod.pod_id, "Cleanup disabled, leaving pod running");
+            }
+            _ => {
+                let runpod = runpod::client::RunPodClient::new(api_key);
+                let result = match cleanup {
+                    config::Cleanup::Stop => runpod.stop_pod(&pod.pod_id).await,
+                    config::Cleanup::Terminate => runpod.terminate_pod(&pod.pod_id).await,
+                    config::Cleanup::Disabled => unreachable!(),
+                };
+                match result {
+                    Ok(()) => tracing::info!(pod_id = %pod.pod_id, ?cleanup, "Pod cleaned up"),
+                    Err(e) => {
+                        tracing::warn!(pod_id = %pod.pod_id, "Failed to clean up pod: {e}");
+                    }
+                }
+            }
         }
 
         if let Err(e) = state.clear() {

@@ -22,25 +22,25 @@ MCP server + plugin that lets Claude spin up cloud GPU instances and interact wi
 
 No prefix on tool names — MCP server name (`remote-kernels`) provides namespacing.
 
-All tool names, descriptions, and parameter descriptions should live in a dedicated file, imported by the implementation. This makes them easy to review and edit in one place.
+Tool descriptions live as doc comments on each tool method in `server.rs` (rmcp proc macro requires string literals, can't reference a separate constants file).
 
 **Pod lifecycle:**
-- `start(pod_id?)` — spin up pod from config, or connect to an existing pod by ID (does not create a kernel — use `create_kernel()`)
+- `start(gpu_type?, image?)` — spin up pod from config, with optional overrides
 - `stop()` — stop the pod (preserves data, storage costs apply)
 - `terminate()` — delete the pod (all non-network-volume data lost)
-- `status()` — pod info, spend, uptime, and status of all kernels
+- `status()` — pod info, spend, uptime, cleanup mode, budget, and kernel list
 
 **Execution:**
-- `execute(kernel_id, code, timeout?, queue?)` — run Python in a kernel. Returns output if done in time, otherwise returns partial output + execution_id. If kernel is busy: error by default, or queue behind current execution if `queue=true`
-- `get_output(kernel_id, execution_id, wait?, timeout?)` — check on / wait for a timed-out execution. execution_id is an incrementing integer per kernel. Mirrors Bash tool's TaskOutput pattern
-- `create_kernel(name)` — spin up a named kernel. Name flows through to the notebook filename
+- `execute(kernel_id, code, timeout?, queue?)` — run Python in a kernel. Returns output if done in time, otherwise returns cell_number for `get_output()`. `timeout=0` for fire-and-forget. `queue=true` to wait behind a busy kernel instead of erroring.
+- `get_output(kernel_id, cell_number, wait?, timeout?)` — check on / wait for a timed-out or fire-and-forget execution. cell_number matches the notebook cell index.
+- `create_kernel(name?)` — spin up a named kernel. Name flows through to the notebook filename
 - `interrupt(kernel_id)` — interrupt running execution
 - `restart_kernel(kernel_id)` — restart kernel (fresh state)
 - `shutdown_kernel(kernel_id)` — shut down a kernel and free resources
 
 **Files:**
-- `sync(include?)` — rsync local code to pod (explicit, not automatic). Respects `.gitignore`, but `include` parameter adds extra paths. Config also has a persistent `sync-include` list
-- `download(remote_path, local_path)` — pull file or folder back locally (folders tarred under the hood)
+- `sync(include?)` — rsync local code to pod (explicit, not automatic). Respects `.gitignore`, but `include` parameter adds extra paths (validated: no `..` or absolute paths). Config also has a persistent `sync-include` list
+- `download(remote_path, local_path)` — pull file or folder back locally
 
 ## Execution Model
 
@@ -48,28 +48,30 @@ All tool names, descriptions, and parameter descriptions should live in a dedica
 - Jupyter kernel over WebSocket as the execution interface
 - Claude writes normal Python — stateful kernel preserves variables, loaded models, etc.
 - kernel_id always required (explicit about which kernel)
-- Timeout follows Bash tool pattern: returns result if fast, returns execution_id if slow
+- Timeout follows Bash tool pattern: returns result if fast, returns cell_number if slow
+- `timeout=0`: fire-and-forget — starts execution, returns cell_number immediately
 - Execute while kernel is busy: error by default, or queue with `queue=true`
+- Queuing via select guard in WS loop — mpsc channel naturally buffers requests
 - Multiple kernels supported for parallelism
 
 ## Code & Data Flow
 
 - Local repo is source of truth for code (git tracked, reviewable)
 - Explicit sync via `sync()` tool (rsync over SSH, MCP server manages ephemeral keypair transparently)
-- Respects .gitignore for sync
+- Respects .gitignore for sync; `sync-include` config and `include` parameter for extra paths
 - Network volumes for large persistent data (datasets, checkpoints, weights)
 - Network volume management is user-driven (optional part of setup, MCP does not create them)
 - Results pulled back explicitly — Claude can inspect remote files via kernel, only copies back what it needs
-- Default cleanup is terminate — pods should be treated as ephemeral
+- Default cleanup is `terminate` — pods should be treated as ephemeral
 - RunPod network volumes have no snapshots or backups. Setup skill educates users about this and recommends external backup (HuggingFace Hub, W&B Artifacts, S3/Backblaze)
 
 ## Observability
 
 - All kernel activity auto-saved as .ipynb notebook files locally (one per kernel, new file on restart)
-- Notebook directory configurable, defaults to `remote-kernels/` at project root
+- Notebook directory configurable via `notebook-dir`, defaults to `remote-kernels/` at project root
+- Not gitignored by default — separate from `.claude/remote-kernels/` internal state. Setup skill lets users choose whether to commit or gitignore.
 - Serves as audit trail for human review — researchers can open in Jupyter to see everything Claude did
 - Claude works via tool responses during the session, notebook is for after-the-fact review
-- User chooses in setup whether notebooks are committed to git or gitignored
 - If committed: CLAUDE.md instruction to commit notebooks (v1, may upgrade to hook later)
 - Claude can read the local .ipynb to recover context after compaction. Add a dedicated history tool only if this proves insufficient
 
@@ -80,7 +82,7 @@ All tool names, descriptions, and parameter descriptions should live in a dedica
 - Custom images: setup skill checks what's missing and generates a startup script to install prerequisites
 - Config stores image name + any custom startup commands; MCP server passes them through to RunPod API
 - RunPod official images activate Jupyter via `JUPYTER_PASSWORD` env var, SSH via `PUBLIC_KEY` env var
-- Watchdog and budget enforcement scripts injected at pod creation via startup command
+- Watchdog and budget enforcement scripts injected via SSH after pod starts
 - RunPod hook mechanism: `/post_start.sh` runs after services start (for runpod/base derivatives)
 
 ## Pod Lifecycle
@@ -100,37 +102,33 @@ All tool names, descriptions, and parameter descriptions should live in a dedica
 - Other 500 errors → retry up to 3 times with 1s delay, then move to next GPU type
 - If all GPU types exhausted: return a clear error to Claude explaining which types were tried and why each failed, so Claude can decide what to try next
 
-### Connecting to Existing Pods
-
-- `start(pod_id)` connects to a pod not created by this session
-- Sets up a new watchdog/heartbeat via SSH (two watchdogs is better than none)
-- Budget enforcement script also injected via SSH
-- Discovers existing kernels on the pod
-
 ## Cleanup
 
-- MCP server cleans up pod on graceful shutdown (stop or terminate per user config, or disabled entirely)
-- Watchdog injected via pod startup command — background process runs `runpodctl stop pod` (or `remove pod` per cleanup config) if no heartbeat for 5 minutes
+- Three modes: `stop` (preserve pod), `terminate` (delete pod), `disabled` (no automatic cleanup)
+- MCP server cleans up pod on graceful shutdown (per config, skipped when disabled)
+- Watchdog injected via SSH — background process runs `runpodctl stop pod` (or `remove pod` per cleanup config) if no heartbeat for 5 minutes. Skipped when cleanup is disabled.
 - Heartbeat sent by MCP server over SSH — runs in background, does not block `start()`
-- When cleanup is disabled: tool output on long-running executions reminds Claude to queue a cleanup command after the current cell completes
+- When cleanup is disabled: `execute()` output reminds Claude to stop/terminate when done
 - Stop hook (bundled in plugin): reads pod ID from state file + verifies via RunPod API. Blocks exit until pod is stopped/terminated per config (skipped when cleanup is disabled)
 
 ## Config & State
 
 - Config file (`remote-kernels.toml` at project root), split into two sections:
-  - Top-level: fields the MCP server acts on (GPU preference list, cleanup behavior, notebook directory, sync-include, etc.)
-  - `[runpod]` section: passed through transparently to the RunPod pod creation API (disk sizes, cloud type, network volume, etc.). Users can set any RunPod API option here without us needing to explicitly support it
+  - Top-level: fields the MCP server acts on (GPU preference list, image, name, cleanup behavior, budget, notebook directory, sync-include, env vars, startup commands)
+  - `[runpod]` section: passed through transparently to the RunPod pod creation API (disk sizes, cloud type, network volume, GPU count, etc.). Extra fields are converted from kebab-case to camelCase and included in the API request. Users can set any RunPod API option here without us needing to explicitly support it.
 - Claude can freely edit the config file (e.g. to fall back to a different GPU type)
 - `start()` also accepts `gpu_type` and `image` overrides for one-off changes
-- State file (`.claude/remote-kernels/state.json`) maintained by MCP server with current pod ID and accumulated spend — read by Stop hook
+- State file (`.claude/remote-kernels/state.json`) maintained by MCP server with current pod ID, cleanup mode, and accumulated spend — read by Stop hook
 - `.claude/remote-kernels/` auto-creates a `.gitignore` with `*`
 
 ## Pod Environment Variables
 
 Three ways to inject env vars into the pod (all optional, later sources override earlier):
-- `inherit-env` — list of variable names to forward from the local environment / `.env` files to the pod
-- `env-file` — path to an env file to load onto the pod (e.g. `.env.pod`)
+- `inherit-env` — list of variable names to forward from the local environment to the pod
+- `env-file` — path to a dotenv file to load onto the pod (resolved relative to project root)
 - `[env]` section — explicit key-value pairs in the config (for non-secret values)
+
+Required vars (`PUBLIC_KEY`, `JUPYTER_PASSWORD`) are always added last and cannot be overridden.
 
 Setup skill recommends `inherit-env` by default, inspecting the project for relevant services (HuggingFace, W&B, etc.)
 
@@ -143,11 +141,13 @@ Setup skill recommends `inherit-env` by default, inspecting the project for rele
 
 ## Budget
 
-- Per-session budget cap via `REMOTE_KERNELS_BUDGET` environment variable (configured in `.claude/settings.json` — Claude Code's built-in guardrails prevent Claude from editing this). Can also be set in config file, but env var takes precedence
-- MCP server calculates spend as `hourly_rate * uptime`, accumulated across stop/start cycles in state file
-- Every `execute()` response includes current spend and remaining budget as a natural reminder
-- Enforcement: pod-side script receives max runtime, runs cleanup action (stop or terminate per config) when time is up. Script injected via startup command for new pods, via SSH for `start(pod_id)`
-- After budget exceeded: all MCP tools return an error explaining that the session budget was reached
+- Per-session budget cap via `REMOTE_KERNELS_BUDGET` environment variable (configured in `.claude/settings.json` — Claude Code's built-in guardrails prevent Claude from editing this). Can also be set via `budget-cap` in config file, but env var takes precedence
+- **Incompatible with `cleanup: disabled`** — budget enforcement requires the ability to stop/terminate the pod. MCP server rejects this combination at startup.
+- MCP server calculates spend as `hourly_rate * uptime`, accumulated across pods in state file. Monotonically increasing per session, never resets.
+- `execute()` responses include current spend and remaining budget when a budget is configured
+- Two enforcement layers:
+  1. MCP server checks budget before `execute`, `create_kernel`, `sync`, and `download`. When exceeded: actively stops/terminates the pod (per cleanup config), then returns error.
+  2. Pod-side script (safety net): receives max runtime in seconds at pod start, runs cleanup action when time is up. Recalculated on each pod start. Only active when cleanup is `stop` or `terminate` (not `disabled`, but that combination is rejected anyway).
 
 ## Platform
 
@@ -164,34 +164,18 @@ Setup skill recommends `inherit-env` by default, inspecting the project for rele
 
 ## Remaining Work
 
-### Phase 1: Align existing implementation with design
+### MCP server improvements
 
-- ~~**Heartbeat → SSH**: move from dedicated Jupyter kernel to SSH, run in background (don't block `start()`)~~
-- ~~**rsync install**: move from Jupyter kernel to startup command~~
-- ~~**start() no auto-kernel**: remove auto-create, let Claude use `create_kernel(name)`~~
-- ~~**Kernel naming**: `create_kernel()` needs a `name` parameter, flows to notebook filename~~
-- ~~**Interrupt tool**: wire existing `interrupt_kernel()` as an MCP tool~~
-- **Config split**: move RunPod-specific fields into `[runpod]` passthrough section
-- ~~**Retry logic**: parse 500 error messages, cycle through GPU types independently~~
-- ~~**Tool descriptions file**: extract all tool/server descriptions to a dedicated file~~ (doc comments on methods — rmcp proc macro requires string literals, can't reference a separate constants file)
+- **Streaming notebook writes**: Currently notebooks are updated only when execution completes (or via `get_output`). Design intent: update the .ipynb as output streams in via the WebSocket, so the notebook reflects intermediate output during long-running executions. Requires changing `Notebook` storage to `Arc<std::sync::Mutex<Notebook>>` so the WS loop callback can safely write to it.
+- **Connect to existing pod**: `start(pod_id)` to connect to a pod not created by this session. Challenge: injecting SSH keys into a running pod. Possible approach: fetch Jupyter token from RunPod GraphQL API (`pod.env`), bootstrap SSH key via Jupyter kernel execution. Deferred until there's user demand.
+- **End-to-end testing**: Integration tests that exercise the full flow — start pod, create kernel, execute, sync, download, budget enforcement, queuing, get_output, terminate. Currently no automated tests.
 
-### Phase 2: New MCP server features
-
-These can be done in any order:
-
-- **Budget enforcement**: pod-side script for hard cutoff, spend tracking in state file, `REMOTE_KERNELS_BUDGET` env var, spend/remaining in `execute()` responses
-- **Execution queuing**: `queue` parameter on `execute()`
-- **get_output / execution_id**: poll mechanism for long-running executions
-- **Connect to existing pod**: `start(pod_id)` with watchdog/heartbeat/budget setup via SSH
-- **Cleanup disable option**: support disabling automatic cleanup, with tool reminders
-- **Sync includes**: `include` parameter on `sync()` + `sync-include` config field
-- **Pod env vars**: `inherit-env`, `env-file`, `[env]` config options
-
-### Phase 3: Plugin and distribution
+### Plugin and distribution
 
 Depends on the MCP server being stable:
 
 - **Plugin shell**: plugin.json, .mcp.json, setup skill, stop hook
+- **Setup skill**: should include setting a budget as an explicit step, recommending `REMOTE_KERNELS_BUDGET` in `.claude/settings.json`
 - **Binary distribution**: GitHub releases, bootstrap script, platform-specific binaries
 
 ## Key Findings from Docs

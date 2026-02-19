@@ -14,9 +14,10 @@ pub struct Notebook {
 impl Notebook {
     /// Create a new notebook for a kernel. If `name` is provided, it's used in the filename;
     /// otherwise falls back to a short prefix of the kernel ID.
-    pub fn new(project_dir: &Path, kernel_id: &str, name: Option<&str>) -> anyhow::Result<Self> {
-        let dir = project_dir.join(".claude/remote-kernels/notebooks");
-        std::fs::create_dir_all(&dir)?;
+    /// `notebook_dir` is the directory to store notebooks in (absolute path).
+    pub fn new(notebook_dir: &Path, kernel_id: &str, name: Option<&str>) -> anyhow::Result<Self> {
+        let dir = notebook_dir;
+        std::fs::create_dir_all(dir)?;
 
         let timestamp = chrono::Local::now().format("%Y%m%d-%H%M%S");
         let label = match name {
@@ -36,7 +37,12 @@ impl Notebook {
         Ok(notebook)
     }
 
-    /// Append a code cell with its output.
+    /// Get the path to the notebook file.
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+
+    /// Append a code cell with its output (used when execution completes synchronously).
     pub fn append_cell(&mut self, code: &str, output: &ExecutionOutput) -> anyhow::Result<()> {
         self.execution_count += 1;
 
@@ -52,6 +58,40 @@ impl Notebook {
 
         self.cells.push(cell);
         self.save()
+    }
+
+    /// Create a cell placeholder with empty output. Returns the cell number (1-indexed).
+    /// Used for streaming: the cell is created up front, then updated as output arrives.
+    pub fn append_cell_placeholder(&mut self, code: &str) -> anyhow::Result<u32> {
+        self.execution_count += 1;
+
+        let cell = json!({
+            "cell_type": "code",
+            "execution_count": self.execution_count,
+            "metadata": {},
+            "source": split_source(code),
+            "outputs": []
+        });
+
+        self.cells.push(cell);
+        self.save()?;
+        Ok(self.execution_count)
+    }
+
+    /// Update the output of an existing cell (identified by `cell_number`, 1-indexed).
+    /// Called as streaming output arrives and on completion.
+    pub fn update_cell_output(
+        &mut self,
+        cell_number: u32,
+        output: &ExecutionOutput,
+    ) -> anyhow::Result<()> {
+        let index = (cell_number - 1) as usize;
+        if let Some(cell) = self.cells.get_mut(index) {
+            let outputs = build_outputs(output, cell_number);
+            cell["outputs"] = json!(outputs);
+            self.save()?;
+        }
+        Ok(())
     }
 
     fn save(&self) -> anyhow::Result<()> {

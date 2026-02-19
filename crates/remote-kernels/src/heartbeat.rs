@@ -10,7 +10,7 @@ use crate::runpod::client::RunPodClient;
 /// Start the heartbeat system in the background.
 ///
 /// Spawns a background task that:
-/// 1. Resolves SSH connection info via the RunPod GraphQL API
+/// 1. Resolves SSH connection info via the `RunPod` GraphQL API
 /// 2. Waits for SSH to become reachable on the pod
 /// 3. Injects a watchdog process that checks `/tmp/heartbeat` every 30s
 ///    and cleans up the pod if stale (>5 min)
@@ -23,9 +23,18 @@ pub fn start(
     pod_id: String,
     ssh_key_path: PathBuf,
     cleanup: Cleanup,
+    budget_remaining_secs: Option<u64>,
 ) -> HeartbeatState {
     let handle = tokio::spawn(async move {
-        if let Err(e) = run(&runpod, &pod_id, &ssh_key_path, cleanup).await {
+        if let Err(e) = run(
+            &runpod,
+            &pod_id,
+            &ssh_key_path,
+            cleanup,
+            budget_remaining_secs,
+        )
+        .await
+        {
             tracing::warn!("Heartbeat task failed: {e}");
         }
     });
@@ -42,12 +51,21 @@ async fn run(
     pod_id: &str,
     ssh_key_path: &Path,
     cleanup: Cleanup,
+    budget_remaining_secs: Option<u64>,
 ) -> anyhow::Result<()> {
     let (ip, port) = resolve_ssh_info(runpod, pod_id).await?;
     wait_for_ssh(ssh_key_path, &ip, port).await?;
-    inject_watchdog(ssh_key_path, &ip, port, cleanup).await?;
 
-    tracing::info!("Heartbeat: watchdog running, starting heartbeat loop");
+    if cleanup == Cleanup::Disabled {
+        tracing::info!("Heartbeat: cleanup disabled, skipping watchdog injection");
+    } else {
+        inject_watchdog(ssh_key_path, &ip, port, cleanup).await?;
+        if let Some(secs) = budget_remaining_secs {
+            inject_budget_enforcer(ssh_key_path, &ip, port, cleanup, secs).await?;
+        }
+    }
+
+    tracing::info!("Heartbeat: starting heartbeat loop");
 
     let mut interval = tokio::time::interval(std::time::Duration::from_secs(60));
     loop {
@@ -112,6 +130,9 @@ async fn inject_watchdog(
     let runpodctl_cmd = match cleanup {
         Cleanup::Stop => "runpodctl stop pod $RUNPOD_POD_ID",
         Cleanup::Terminate => "runpodctl remove pod $RUNPOD_POD_ID",
+        Cleanup::Disabled => {
+            unreachable!("inject_watchdog should not be called when cleanup is disabled")
+        }
     };
 
     // The script is wrapped in single quotes for bash -c, so $ expansions happen
@@ -136,6 +157,42 @@ async fn inject_watchdog(
 
     ssh_cmd(ssh_key_path, public_ip, ssh_port, &watchdog).await?;
     tracing::info!("Heartbeat: watchdog injected on pod");
+    Ok(())
+}
+
+/// Inject a budget enforcement script on the pod via SSH.
+///
+/// Sleeps for the given number of seconds, then runs the cleanup action.
+/// This is a safety net — the MCP server also checks budget before each tool call.
+async fn inject_budget_enforcer(
+    ssh_key_path: &Path,
+    public_ip: &str,
+    ssh_port: u16,
+    cleanup: Cleanup,
+    remaining_secs: u64,
+) -> anyhow::Result<()> {
+    let runpodctl_cmd = match cleanup {
+        Cleanup::Stop => "runpodctl stop pod $RUNPOD_POD_ID",
+        Cleanup::Terminate => "runpodctl remove pod $RUNPOD_POD_ID",
+        Cleanup::Disabled => {
+            unreachable!("budget enforcer should not be called when cleanup is disabled")
+        }
+    };
+
+    let script = format!(
+        concat!(
+            "nohup bash -c '",
+            "sleep {secs}; ",
+            r#"echo "Budget time limit reached ({secs}s), cleaning up pod..." >> /tmp/watchdog.log; "#,
+            "{cmd}",
+            "' </dev/null >/dev/null 2>&1 &",
+        ),
+        secs = remaining_secs,
+        cmd = runpodctl_cmd
+    );
+
+    ssh_cmd(ssh_key_path, public_ip, ssh_port, &script).await?;
+    tracing::info!(remaining_secs, "Heartbeat: budget enforcer injected on pod");
     Ok(())
 }
 

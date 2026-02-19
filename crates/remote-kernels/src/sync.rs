@@ -7,12 +7,14 @@ use tokio::process::Command;
 ///
 /// Uses the ephemeral SSH key generated at pod creation.
 /// Respects `.gitignore` via rsync's `--filter=':- .gitignore'`.
+/// Extra include paths are added before the gitignore filter so they take priority.
 pub async fn sync_to_pod(
     project_dir: &Path,
     ssh_key_path: &Path,
     public_ip: &str,
     ssh_port: u16,
     remote_path: &str,
+    extra_includes: &[String],
 ) -> anyhow::Result<String> {
     let ssh_cmd = format!(
         "ssh -i {} -p {ssh_port} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR",
@@ -24,20 +26,27 @@ pub async fn sync_to_pod(
 
     tracing::info!(%destination, "Syncing files to pod");
 
+    let mut args = vec!["-az".to_string(), "--delete".to_string()];
+
+    // Include paths go before the gitignore filter so they take priority.
+    for include in extra_includes {
+        args.push(format!("--include={include}"));
+    }
+
+    args.extend([
+        "--filter=:- .gitignore".to_string(),
+        "--exclude=.git".to_string(),
+        "--exclude=.claude".to_string(),
+        "--exclude=target".to_string(),
+        "--exclude=node_modules".to_string(),
+        "-e".to_string(),
+        ssh_cmd,
+        source,
+        destination,
+    ]);
+
     let output = Command::new("rsync")
-        .args([
-            "-az",
-            "--delete",
-            "--filter=:- .gitignore",
-            "--exclude=.git",
-            "--exclude=.claude",
-            "--exclude=target",
-            "--exclude=node_modules",
-            "-e",
-            &ssh_cmd,
-            &source,
-            &destination,
-        ])
+        .args(&args)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .output()

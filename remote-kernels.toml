@@ -1,11 +1,38 @@
 # GPU types to try, in order of preference.
 gpu-type-ids = ["NVIDIA GeForce RTX 3090"]
 
-# Number of GPUs.
-# gpu-count = 1
-
 # Container image.
 # image-name = "runpod/pytorch:2.1.0-py3.10-cuda11.8.0-devel-ubuntu22.04"
+
+# What to do on cleanup: "stop" (preserve pod), "terminate" (delete pod), or "disabled" (no automatic cleanup).
+cleanup = "terminate"
+
+# Pod name prefix.
+# name = "remote-kernels"
+
+# Per-session budget cap in dollars.
+# budget-cap = 5.0
+
+# Directory for notebook files (relative to project root).
+# notebook-dir = "remote-kernels"
+
+# Forward these environment variables from local machine to the pod.
+# inherit-env = ["HF_TOKEN", "WANDB_API_KEY"]
+
+# Load a dotenv file onto the pod (path relative to project root).
+# env-file = ".env.pod"
+
+# Extra environment variables for the pod.
+# [env]
+# MY_VAR = "value"
+
+# Extra paths to include when syncing, even if gitignored.
+# sync-include = ["data/small-dataset/"]
+
+# RunPod API settings. Known fields are typed; extra fields are passed through to the API.
+[runpod]
+# Number of GPUs.
+# gpu-count = 1
 
 # Disk sizes in GB.
 # container-disk-gb = 50
@@ -15,18 +42,7 @@ gpu-type-ids = ["NVIDIA GeForce RTX 3090"]
 # Attach a network volume (optional, get ID from RunPod dashboard).
 # network-volume-id = "vol_abc123"
 
-# What to do on cleanup: "stop" (preserve pod) or "terminate" (delete pod).
-cleanup = "terminate"
-
 # Cloud type: "SECURE" or "COMMUNITY".
 cloud-type = "COMMUNITY"
 
-# Pod name prefix.
-# name = "remote-kernels"
-
-# Per-session budget cap in dollars. Warnings when approaching limit.
-# budget-cap = 5.0
-
-# Extra environment variables for the pod.
-# [env]
-# MY_VAR = "value"
+# Any additional RunPod API fields can be added here (kebab-case, converted to camelCase for the API).

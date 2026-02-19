@@ -36,6 +36,9 @@ pub struct PodCreateInput {
     pub env: Option<HashMap<String, String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub docker_start_cmd: Option<Vec<String>>,
+    /// Extra fields passed through from [runpod] config section.
+    #[serde(flatten)]
+    pub extra: HashMap<String, serde_json::Value>,
 }
 
 /// Pod response from the `RunPod` API.
