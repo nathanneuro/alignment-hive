@@ -819,7 +819,7 @@ Ask these questions in a single batch, then make a single edit.
   "permissions": {
     "allow": [
       "Bash(git add *)",
-      "Bash(git commit *)"
+      "Bash(git commit:*)"
     ]
   }
 }
