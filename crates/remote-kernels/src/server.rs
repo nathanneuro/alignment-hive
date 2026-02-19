@@ -240,32 +240,15 @@ impl RemoteKernelsServer {
             .await
             .map_err(|e| McpError::internal_error(format!("Pod failed to start: {e}"), None))?;
 
-        // Wait for SSH info (public IP + port mapping). These may lag behind
-        // the RUNNING status by a few seconds in the RunPod API.
-        let (ssh_ip, ssh_port) = match self.wait_for_ssh_info(&created_pod.id).await {
-            Ok(info) => info,
-            Err(e) => {
-                // Pod is useless without SSH — terminate it.
-                tracing::warn!("Pod has no SSH info, terminating: {e}");
-                let _ = self.runpod.terminate_pod(&created_pod.id).await;
-                let mut state = self.state.lock().await;
-                state.pod.take();
-                let _ = state.clear();
-                return Err(McpError::internal_error(format!("{e}"), None));
-            }
-        };
-
-        // Cache SSH info and start heartbeat in background (non-blocking).
+        // Start heartbeat in background. It resolves SSH info via GraphQL
+        // internally — does not block start().
         {
             let mut state = self.state.lock().await;
             if let Some(ref mut pod_state) = state.pod {
-                pod_state.public_ip = Some(ssh_ip.clone());
-                pod_state.ssh_port = Some(ssh_port);
-
                 let hb = crate::heartbeat::start(
+                    Arc::clone(&self.runpod),
+                    created_pod.id.clone(),
                     pod_state.ssh_key_path.clone(),
-                    ssh_ip,
-                    ssh_port,
                     self.config.cleanup,
                 );
                 pod_state.heartbeat = Some(hb);
@@ -804,9 +787,10 @@ impl RemoteKernelsServer {
                 .ok_or_else(|| McpError::internal_error("No pod running", None))?
         };
 
-        let (ip, port) = self.wait_for_ssh_info(&pod_id).await.map_err(|e| {
-            McpError::internal_error(format!("Failed to get SSH info: {e}"), None)
-        })?;
+        let (ip, port) = self
+            .wait_for_ssh_info(&pod_id)
+            .await
+            .map_err(|e| McpError::internal_error(format!("Failed to get SSH info: {e}"), None))?;
 
         let mut state = self.state.lock().await;
         if let Some(ref mut pod_state) = state.pod {

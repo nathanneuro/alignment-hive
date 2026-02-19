@@ -1,8 +1,6 @@
 use reqwest::Client;
 
-use super::types::{
-    GraphQlPodData, GraphQlResponse, Pod, PodCreateInput, PodRuntimePort,
-};
+use super::types::{GraphQlPodData, GraphQlResponse, Pod, PodCreateInput, PodRuntimePort};
 
 const REST_URL: &str = "https://rest.runpod.io/v1";
 const GRAPHQL_URL: &str = "https://api.runpod.io/graphql";

@@ -87,7 +87,7 @@ All tool names, descriptions, and parameter descriptions should live in a dedica
 
 - Claude spins up pods on demand via MCP tool
 - Both on-demand and spot instances supported (setup skill guides the choice)
-- Public IP required — `start()` fails with a clear error if the assigned machine has no public IP (needed for SSH heartbeat and file sync)
+- Public IP needed for SSH heartbeat, file sync, and download. Heartbeat resolves SSH info in the background — if it never appears, heartbeat logs a warning but `start()` still succeeds (sync/download resolve SSH info on demand). SECURE cloud is recommended; COMMUNITY cloud has not been verified to have public IP issues (earlier test failures were caused by using the REST API which doesn't return port mappings for any cloud type)
 - GPU type / image / volume configured via config file (Claude can override)
 - Setup skill dynamically helps users configure based on their environment, warns about inconsistent options
 - v1: one pod per session. v2: multiple pods

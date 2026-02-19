@@ -1,62 +1,89 @@
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
+use std::sync::Arc;
 
 use tokio::process::Command;
 
 use crate::config::Cleanup;
+use crate::runpod::client::RunPodClient;
 
 /// Start the heartbeat system in the background.
 ///
 /// Spawns a background task that:
-/// 1. Waits for SSH to become reachable on the pod
-/// 2. Injects a watchdog process that checks `/tmp/heartbeat` every 30s
+/// 1. Resolves SSH connection info via the RunPod GraphQL API
+/// 2. Waits for SSH to become reachable on the pod
+/// 3. Injects a watchdog process that checks `/tmp/heartbeat` every 30s
 ///    and cleans up the pod if stale (>5 min)
-/// 3. Periodically touches `/tmp/heartbeat` via SSH to keep the watchdog alive
+/// 4. Periodically touches `/tmp/heartbeat` via SSH to keep the watchdog alive
 ///
-/// Returns immediately without blocking — SSH readiness is handled internally.
+/// Returns immediately without blocking. If SSH info never becomes available
+/// (e.g. the machine has no public IP), the task logs a warning and exits.
 pub fn start(
+    runpod: Arc<RunPodClient>,
+    pod_id: String,
     ssh_key_path: PathBuf,
-    public_ip: String,
-    ssh_port: u16,
     cleanup: Cleanup,
 ) -> HeartbeatState {
     let handle = tokio::spawn(async move {
-        if let Err(e) = run(&ssh_key_path, &public_ip, ssh_port, cleanup).await {
+        if let Err(e) = run(&runpod, &pod_id, &ssh_key_path, cleanup).await {
             tracing::warn!("Heartbeat task failed: {e}");
         }
     });
 
-    HeartbeatState { task_handle: handle }
+    HeartbeatState {
+        task_handle: handle,
+    }
 }
 
-/// The main heartbeat loop: wait for SSH, inject watchdog, then send heartbeats.
+/// The main heartbeat pipeline: resolve SSH info, wait for SSH, inject watchdog,
+/// then send heartbeats.
 async fn run(
+    runpod: &RunPodClient,
+    pod_id: &str,
     ssh_key_path: &Path,
-    public_ip: &str,
-    ssh_port: u16,
     cleanup: Cleanup,
 ) -> anyhow::Result<()> {
-    wait_for_ssh(ssh_key_path, public_ip, ssh_port).await?;
-    inject_watchdog(ssh_key_path, public_ip, ssh_port, cleanup).await?;
+    let (ip, port) = resolve_ssh_info(runpod, pod_id).await?;
+    wait_for_ssh(ssh_key_path, &ip, port).await?;
+    inject_watchdog(ssh_key_path, &ip, port, cleanup).await?;
 
     tracing::info!("Heartbeat: watchdog running, starting heartbeat loop");
 
     let mut interval = tokio::time::interval(std::time::Duration::from_secs(60));
     loop {
         interval.tick().await;
-        match ssh_cmd(ssh_key_path, public_ip, ssh_port, "touch /tmp/heartbeat").await {
+        match ssh_cmd(ssh_key_path, &ip, port, "touch /tmp/heartbeat").await {
             Ok(_) => tracing::debug!("Heartbeat sent"),
             Err(e) => tracing::warn!("Heartbeat failed: {e}"),
         }
     }
 }
 
+/// Poll the GraphQL API until SSH connection info is available.
+async fn resolve_ssh_info(runpod: &RunPodClient, pod_id: &str) -> anyhow::Result<(String, u16)> {
+    for attempt in 1..=40 {
+        match runpod.get_ssh_info(pod_id).await {
+            Ok(Some((ip, port))) => {
+                tracing::info!(attempt, %ip, port, "Heartbeat: SSH info resolved");
+                return Ok((ip, port));
+            }
+            Ok(None) => {
+                tracing::debug!(attempt, "Heartbeat: SSH info not yet available");
+            }
+            Err(e) => {
+                tracing::debug!(attempt, error = %e, "Heartbeat: failed to query SSH info");
+            }
+        }
+        tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+    }
+    anyhow::bail!(
+        "SSH info not available after 2 minutes — heartbeat not started. \
+         sync() and download() may still work (they resolve SSH info on demand)."
+    )
+}
+
 /// Wait for SSH to become reachable, retrying up to ~2 minutes.
-async fn wait_for_ssh(
-    ssh_key_path: &Path,
-    public_ip: &str,
-    ssh_port: u16,
-) -> anyhow::Result<()> {
+async fn wait_for_ssh(ssh_key_path: &Path, public_ip: &str, ssh_port: u16) -> anyhow::Result<()> {
     for attempt in 1..=24 {
         match ssh_cmd(ssh_key_path, public_ip, ssh_port, "echo ok").await {
             Ok(_) => {
