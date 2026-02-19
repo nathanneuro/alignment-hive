@@ -166,7 +166,7 @@ Setup skill recommends `inherit-env` by default, inspecting the project for rele
 
 ### Phase 1: Align existing implementation with design
 
-- **Heartbeat → SSH**: move from dedicated Jupyter kernel to SSH, run in background (don't block `start()`)
+- ~~**Heartbeat → SSH**: move from dedicated Jupyter kernel to SSH, run in background (don't block `start()`)~~
 - ~~**rsync install**: move from Jupyter kernel to startup command~~
 - ~~**start() no auto-kernel**: remove auto-create, let Claude use `create_kernel(name)`~~
 - ~~**Kernel naming**: `create_kernel()` needs a `name` parameter, flows to notebook filename~~
@@ -197,7 +197,9 @@ Depends on the MCP server being stable:
 ## Key Findings from Docs
 
 ### RunPod API
-- Two APIs: REST (`rest.runpod.io/v1`) and GraphQL (`api.runpod.io/graphql`). REST is newer but GraphQL has features REST doesn't (e.g. `stopAfter`)
+- Two APIs: REST (`rest.runpod.io/v1`) and GraphQL (`api.runpod.io/graphql`). REST is newer but GraphQL has features REST doesn't (e.g. `stopAfter`, runtime port mappings)
+- **Critical**: REST API does NOT return runtime networking info (port mappings, public IP). Must use GraphQL `pod.runtime.ports` for SSH connection details (ip, publicPort where privatePort=22). SSH is always on a remapped port, never 22 directly
+- REST OpenAPI spec at `/v1/openapi.json`, GraphQL schema browser at `graphql-spec.runpod.io`. No official Rust SDK; community crates are immature
 - Pod creation: `POST /v1/pods` with `gpuTypeIds`, `imageName`, `networkVolumeId`, etc.
 - Network volumes: persist across pod termination, shareable, S3-compatible access, must be in same datacenter as pod
 - Every pod gets auto-injected `RUNPOD_API_KEY` (pod-scoped) and `RUNPOD_POD_ID` env vars

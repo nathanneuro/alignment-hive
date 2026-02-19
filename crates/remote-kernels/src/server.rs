@@ -240,6 +240,38 @@ impl RemoteKernelsServer {
             .await
             .map_err(|e| McpError::internal_error(format!("Pod failed to start: {e}"), None))?;
 
+        // Wait for SSH info (public IP + port mapping). These may lag behind
+        // the RUNNING status by a few seconds in the RunPod API.
+        let (ssh_ip, ssh_port) = match self.wait_for_ssh_info(&created_pod.id).await {
+            Ok(info) => info,
+            Err(e) => {
+                // Pod is useless without SSH — terminate it.
+                tracing::warn!("Pod has no SSH info, terminating: {e}");
+                let _ = self.runpod.terminate_pod(&created_pod.id).await;
+                let mut state = self.state.lock().await;
+                state.pod.take();
+                let _ = state.clear();
+                return Err(McpError::internal_error(format!("{e}"), None));
+            }
+        };
+
+        // Cache SSH info and start heartbeat in background (non-blocking).
+        {
+            let mut state = self.state.lock().await;
+            if let Some(ref mut pod_state) = state.pod {
+                pod_state.public_ip = Some(ssh_ip.clone());
+                pod_state.ssh_port = Some(ssh_port);
+
+                let hb = crate::heartbeat::start(
+                    pod_state.ssh_key_path.clone(),
+                    ssh_ip,
+                    ssh_port,
+                    self.config.cleanup,
+                );
+                pod_state.heartbeat = Some(hb);
+            }
+        }
+
         // Wait for Jupyter server to be ready.
         {
             let state = self.state.lock().await;
@@ -247,36 +279,6 @@ impl RemoteKernelsServer {
             pod_state.jupyter.wait_until_ready().await.map_err(|e| {
                 McpError::internal_error(format!("Jupyter failed to start: {e}"), None)
             })?;
-        }
-
-        // Start heartbeat + watchdog.
-        {
-            let state = self.state.lock().await;
-            if let Some(ref pod) = state.pod {
-                match crate::heartbeat::start(
-                    &pod.jupyter,
-                    &pod.pod_id,
-                    &pod.jupyter_token,
-                    &pod.session_id,
-                    self.config.cleanup,
-                )
-                .await
-                {
-                    Ok((hb_kernel_id, handle)) => {
-                        drop(state);
-                        let mut state = self.state.lock().await;
-                        if let Some(ref mut pod) = state.pod {
-                            pod.heartbeat = Some(crate::heartbeat::HeartbeatState {
-                                kernel_id: hb_kernel_id,
-                                task_handle: handle,
-                            });
-                        }
-                    }
-                    Err(e) => {
-                        tracing::warn!("Failed to start heartbeat/watchdog: {e}");
-                    }
-                }
-            }
         }
 
         Ok(CallToolResult::success(vec![Content::text(format!(
@@ -754,9 +756,35 @@ impl RemoteKernelsServer {
         }
     }
 
-    /// Get SSH connection info, refreshing from the API if needed.
+    /// Poll the GraphQL API until the pod has SSH connection info.
+    ///
+    /// Runtime port mappings may lag behind the RUNNING status by a few seconds.
+    async fn wait_for_ssh_info(&self, pod_id: &str) -> anyhow::Result<(String, u16)> {
+        for attempt in 1..=20 {
+            match self.runpod.get_ssh_info(pod_id).await {
+                Ok(Some((ip, port))) => {
+                    tracing::info!(attempt, %ip, port, "SSH info available");
+                    return Ok((ip, port));
+                }
+                Ok(None) => {
+                    tracing::debug!(attempt, "SSH info not yet available");
+                }
+                Err(e) => {
+                    tracing::debug!(attempt, error = %e, "Failed to query SSH info");
+                }
+            }
+            tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+        }
+
+        anyhow::bail!(
+            "Pod does not have a public IP or SSH port after 60s. \
+             This is required for heartbeat, sync, and download. \
+             Try starting again — a different machine may be assigned."
+        )
+    }
+
+    /// Get SSH connection info from cached state. Refreshes from API if not cached.
     async fn get_ssh_info(&self) -> Result<(String, u16), McpError> {
-        // Check if we already have it cached.
         {
             let state = self.state.lock().await;
             if let Some(ref pod) = state.pod
@@ -766,26 +794,7 @@ impl RemoteKernelsServer {
             }
         }
 
-        // Refresh from API.
-        self.refresh_ssh_info().await?;
-
-        let state = self.state.lock().await;
-        let Some(ref pod) = state.pod else {
-            return Err(McpError::internal_error("No pod running", None));
-        };
-        match (&pod.public_ip, pod.ssh_port) {
-            (Some(ip), Some(port)) => Ok((ip.clone(), port)),
-            _ => Err(McpError::internal_error(
-                "Pod does not have a public IP or SSH port mapping. \
-                 This may happen on some community cloud machines. \
-                 Try again in a moment, or use execute() to transfer files via Python.",
-                None,
-            )),
-        }
-    }
-
-    /// Fetch public IP and SSH port mapping from the `RunPod` API and cache in state.
-    async fn refresh_ssh_info(&self) -> Result<(), McpError> {
+        // Not cached — this shouldn't happen after start() succeeds, but handle it.
         let pod_id = {
             let state = self.state.lock().await;
             state
@@ -795,26 +804,17 @@ impl RemoteKernelsServer {
                 .ok_or_else(|| McpError::internal_error("No pod running", None))?
         };
 
-        let pod =
-            self.runpod.get_pod(&pod_id).await.map_err(|e| {
-                McpError::internal_error(format!("Failed to get pod info: {e}"), None)
-            })?;
+        let (ip, port) = self.wait_for_ssh_info(&pod_id).await.map_err(|e| {
+            McpError::internal_error(format!("Failed to get SSH info: {e}"), None)
+        })?;
 
         let mut state = self.state.lock().await;
         if let Some(ref mut pod_state) = state.pod {
-            if let Some(ref ip) = pod.public_ip
-                && !ip.is_empty()
-            {
-                pod_state.public_ip = Some(ip.clone());
-            }
-            if let Some(ref mappings) = pod.port_mappings
-                && let Some(&port) = mappings.get("22")
-            {
-                pod_state.ssh_port = Some(port);
-            }
+            pod_state.public_ip = Some(ip.clone());
+            pod_state.ssh_port = Some(port);
         }
 
-        Ok(())
+        Ok((ip, port))
     }
 }
 

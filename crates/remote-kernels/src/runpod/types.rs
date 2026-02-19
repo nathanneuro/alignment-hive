@@ -1,3 +1,12 @@
+// RunPod API types.
+//
+// REST API (rest.runpod.io/v1): used for pod CRUD. OpenAPI spec at /v1/openapi.json.
+// GraphQL API (api.runpod.io/graphql): used for runtime info (ports, GPU stats).
+//   Schema browser: https://graphql-spec.runpod.io/
+//
+// The REST API does NOT return runtime networking info (port mappings, public IP).
+// Use the GraphQL API for SSH connection details.
+
 use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
@@ -51,11 +60,7 @@ pub struct Pod {
     #[serde(default)]
     pub last_started_at: Option<String>,
     #[serde(default)]
-    pub public_ip: Option<String>,
-    #[serde(default)]
     pub ports: Option<Vec<String>>,
-    #[serde(default)]
-    pub port_mappings: Option<HashMap<String, u16>>,
     #[serde(default)]
     pub machine_id: Option<String>,
     #[serde(default)]
@@ -83,4 +88,50 @@ impl Pod {
             .and_then(|m| m.gpu_type_id.as_deref())
             .unwrap_or("unknown")
     }
+}
+
+// --- GraphQL response types (api.runpod.io/graphql) ---
+
+/// Wrapper for GraphQL `{ data: { pod: ... } }` responses.
+#[derive(Debug, Deserialize)]
+pub struct GraphQlResponse<T> {
+    pub data: Option<T>,
+    #[serde(default)]
+    pub errors: Option<Vec<GraphQlError>>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct GraphQlError {
+    pub message: String,
+}
+
+/// The `pod` field from a GraphQL query.
+#[derive(Debug, Deserialize)]
+pub struct GraphQlPodData {
+    pub pod: Option<GraphQlPod>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct GraphQlPod {
+    pub runtime: Option<PodRuntime>,
+}
+
+/// Runtime info from the GraphQL API (only populated while pod is running).
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PodRuntime {
+    #[serde(default)]
+    pub ports: Vec<PodRuntimePort>,
+}
+
+/// A single port mapping from the GraphQL runtime.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PodRuntimePort {
+    pub ip: String,
+    pub is_ip_public: bool,
+    pub private_port: u16,
+    pub public_port: u16,
+    #[serde(rename = "type")]
+    pub port_type: String,
 }

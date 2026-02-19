@@ -1,20 +1,8 @@
-#![warn(clippy::pedantic)]
-#![allow(clippy::module_name_repetitions)]
-
-mod config;
-mod descriptions;
-mod heartbeat;
-mod jupyter;
-mod notebook;
-mod runpod;
-mod server;
-mod ssh;
-mod state;
-mod sync;
-
 use clap::Parser;
 use rmcp::ServiceExt;
 use std::path::PathBuf;
+
+use remote_kernels::{config, runpod, server, state};
 
 #[derive(Parser)]
 #[command(

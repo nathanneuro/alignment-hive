@@ -1,8 +1,11 @@
 use reqwest::Client;
 
-use super::types::{Pod, PodCreateInput};
+use super::types::{
+    GraphQlPodData, GraphQlResponse, Pod, PodCreateInput, PodRuntimePort,
+};
 
-const BASE_URL: &str = "https://rest.runpod.io/v1";
+const REST_URL: &str = "https://rest.runpod.io/v1";
+const GRAPHQL_URL: &str = "https://api.runpod.io/graphql";
 
 #[derive(Debug, thiserror::Error)]
 pub enum RunPodError {
@@ -49,12 +52,14 @@ impl RunPodClient {
         }
     }
 
+    // --- REST API (rest.runpod.io/v1) ---
+
     pub async fn create_pod(&self, input: &PodCreateInput) -> Result<Pod, RunPodError> {
         tracing::debug!(request = %serde_json::to_string_pretty(input).unwrap_or_default(), "Creating pod");
 
         let resp = self
             .client
-            .post(format!("{BASE_URL}/pods"))
+            .post(format!("{REST_URL}/pods"))
             .bearer_auth(&self.api_key)
             .json(input)
             .send()
@@ -77,7 +82,7 @@ impl RunPodClient {
     pub async fn get_pod(&self, pod_id: &str) -> anyhow::Result<Pod> {
         let resp = self
             .client
-            .get(format!("{BASE_URL}/pods/{pod_id}"))
+            .get(format!("{REST_URL}/pods/{pod_id}"))
             .bearer_auth(&self.api_key)
             .send()
             .await?;
@@ -95,7 +100,7 @@ impl RunPodClient {
     pub async fn stop_pod(&self, pod_id: &str) -> anyhow::Result<()> {
         let resp = self
             .client
-            .post(format!("{BASE_URL}/pods/{pod_id}/stop"))
+            .post(format!("{REST_URL}/pods/{pod_id}/stop"))
             .bearer_auth(&self.api_key)
             .send()
             .await?;
@@ -112,7 +117,7 @@ impl RunPodClient {
     pub async fn terminate_pod(&self, pod_id: &str) -> anyhow::Result<()> {
         let resp = self
             .client
-            .delete(format!("{BASE_URL}/pods/{pod_id}"))
+            .delete(format!("{REST_URL}/pods/{pod_id}"))
             .bearer_auth(&self.api_key)
             .send()
             .await?;
@@ -124,5 +129,60 @@ impl RunPodClient {
         }
 
         Ok(())
+    }
+
+    // --- GraphQL API (api.runpod.io/graphql) ---
+
+    /// Get runtime port mappings for a pod via the GraphQL API.
+    ///
+    /// The REST API does not return runtime networking info. The GraphQL API
+    /// provides `runtime.ports` with the actual IP and port assignments.
+    pub async fn get_runtime_ports(&self, pod_id: &str) -> anyhow::Result<Vec<PodRuntimePort>> {
+        let query = serde_json::json!({
+            "query": format!(
+                r#"query {{ pod(input: {{podId: "{pod_id}"}}) {{ runtime {{ ports {{ ip isIpPublic privatePort publicPort type }} }} }} }}"#
+            )
+        });
+
+        let resp = self
+            .client
+            .post(GRAPHQL_URL)
+            .bearer_auth(&self.api_key)
+            .json(&query)
+            .send()
+            .await?;
+
+        let status = resp.status();
+        let body = resp.text().await.unwrap_or_default();
+        if !status.is_success() {
+            anyhow::bail!("RunPod GraphQL error ({status}): {body}");
+        }
+
+        tracing::debug!(%body, "GraphQL runtime ports response");
+
+        let parsed: GraphQlResponse<GraphQlPodData> = serde_json::from_str(&body)?;
+        if let Some(errors) = &parsed.errors {
+            let msgs: Vec<_> = errors.iter().map(|e| e.message.as_str()).collect();
+            anyhow::bail!("RunPod GraphQL errors: {}", msgs.join("; "));
+        }
+
+        Ok(parsed
+            .data
+            .and_then(|d| d.pod)
+            .and_then(|p| p.runtime)
+            .map_or_else(Vec::new, |r| r.ports))
+    }
+
+    /// Get SSH connection info (public IP + external port) via the GraphQL API.
+    ///
+    /// Returns `(ip, port)` for the SSH service, or `None` if not yet available.
+    pub async fn get_ssh_info(&self, pod_id: &str) -> anyhow::Result<Option<(String, u16)>> {
+        let ports = self.get_runtime_ports(pod_id).await?;
+
+        let ssh = ports
+            .iter()
+            .find(|p| p.private_port == 22 && p.is_ip_public);
+
+        Ok(ssh.map(|p| (p.ip.clone(), p.public_port)))
     }
 }
