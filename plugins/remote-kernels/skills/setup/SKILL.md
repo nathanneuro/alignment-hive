@@ -25,6 +25,7 @@ Walk through this interactively with the user using AskUserQuestion. Start by wr
 - **API Key** — `RUNPOD_API_KEY` needed. Check if it's already set. If not, `.env.local` is the typical place for it
 - **GPU Selection** — what kind of workload? Set `gpu-type-ids` with fallback options
 - **Docker Image** — default `runpod/pytorch` works for most ML. Custom images must have Jupyter + SSH; missing prereqs can go in `startup-commands`
+- **Cloud Type** — default is `SECURE`. `COMMUNITY` is cheaper but less reliable. Recommend sticking with `SECURE` unless cost is a priority
 - **Network Volume** — for persistent data across pod terminations. Important: RunPod volumes have no snapshots/backups — recommend external backup (HF Hub, W&B, S3)
 - **Cleanup Mode** — stop (preserve pod) / terminate (delete pod) / disabled (manual)
 - **Budget** — goes in `.claude/settings.json` `env` section as `REMOTE_KERNELS_BUDGET` (not in remote-kernels.toml, so Claude can't modify it). Incompatible with cleanup=disabled
