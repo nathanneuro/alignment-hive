@@ -10,6 +10,7 @@ use serde::Deserialize;
 use tokio::sync::Mutex;
 
 use crate::config::Config;
+use crate::descriptions;
 use crate::jupyter::rest::JupyterClient;
 use crate::runpod::client::RunPodClient;
 use crate::runpod::types::PodCreateInput;
@@ -92,10 +93,9 @@ impl RemoteKernelsServer {
         }
     }
 
-    #[tool(
-        name = "start",
-        description = "Spin up a GPU pod. Uses settings from remote-kernels.toml, with optional overrides. Returns pod info."
-    )]
+    /// Spin up a GPU pod. Uses settings from remote-kernels.toml, with optional overrides.
+    /// Returns pod info.
+    #[tool(name = "start")]
     async fn start(&self, params: Parameters<StartParams>) -> Result<CallToolResult, McpError> {
         let params = params.0;
 
@@ -310,10 +310,9 @@ impl RemoteKernelsServer {
         ))]))
     }
 
-    #[tool(
-        name = "stop",
-        description = "Stop the running pod. The pod is preserved and can be restarted (storage costs still apply). Use terminate() to fully delete it."
-    )]
+    /// Stop the running pod. The pod is preserved and can be restarted (storage costs still apply).
+    /// Use terminate() to fully delete it.
+    #[tool(name = "stop")]
     async fn stop(&self, _params: Parameters<EmptyParams>) -> Result<CallToolResult, McpError> {
         let pod_id = {
             let state = self.state.lock().await;
@@ -358,10 +357,9 @@ impl RemoteKernelsServer {
         ))]))
     }
 
-    #[tool(
-        name = "terminate",
-        description = "Terminate (delete) the running pod. All data on the pod is lost. Network volumes are preserved."
-    )]
+    /// Terminate (delete) the running pod. All data on the pod is lost.
+    /// Network volumes are preserved.
+    #[tool(name = "terminate")]
     async fn terminate(
         &self,
         _params: Parameters<EmptyParams>,
@@ -409,10 +407,8 @@ impl RemoteKernelsServer {
         ))]))
     }
 
-    #[tool(
-        name = "status",
-        description = "Get the current pod status including GPU, cost, and uptime."
-    )]
+    /// Get the current pod status including GPU, cost, and uptime.
+    #[tool(name = "status")]
     async fn status(&self, _params: Parameters<EmptyParams>) -> Result<CallToolResult, McpError> {
         let pod_id = {
             let state = self.state.lock().await;
@@ -466,10 +462,8 @@ impl RemoteKernelsServer {
         Ok(CallToolResult::success(vec![Content::text(info)]))
     }
 
-    #[tool(
-        name = "create_kernel",
-        description = "Spin up an additional kernel on the running pod. Returns the new kernel ID."
-    )]
+    /// Spin up an additional kernel on the running pod. Returns the new kernel ID.
+    #[tool(name = "create_kernel")]
     async fn create_kernel(
         &self,
         params: Parameters<CreateKernelParams>,
@@ -526,10 +520,9 @@ impl RemoteKernelsServer {
         ))]))
     }
 
-    #[tool(
-        name = "execute",
-        description = "Execute Python code in a Jupyter kernel. Returns the output (stdout, stderr, result, errors). For long-running code, consider using a reasonable timeout."
-    )]
+    /// Execute Python code in a Jupyter kernel. Returns the output (stdout, stderr, result, errors).
+    /// For long-running code, consider using a reasonable timeout.
+    #[tool(name = "execute")]
     async fn execute(&self, params: Parameters<ExecuteParams>) -> Result<CallToolResult, McpError> {
         let params = params.0;
         let timeout_secs = params.timeout.unwrap_or(30);
@@ -577,10 +570,9 @@ impl RemoteKernelsServer {
         }
     }
 
-    #[tool(
-        name = "sync",
-        description = "Sync local project files to the running pod via rsync over SSH. Respects .gitignore. Requires the pod to have a public IP (may not work on all community cloud machines)."
-    )]
+    /// Sync local project files to the running pod via rsync over SSH. Respects .gitignore.
+    /// Requires the pod to have a public IP (may not work on all community cloud machines).
+    #[tool(name = "sync")]
     async fn sync(&self, _params: Parameters<EmptyParams>) -> Result<CallToolResult, McpError> {
         let (project_dir, ssh_key_path) = {
             let state = self.state.lock().await;
@@ -608,10 +600,8 @@ impl RemoteKernelsServer {
         Ok(CallToolResult::success(vec![Content::text(result)]))
     }
 
-    #[tool(
-        name = "download",
-        description = "Download a file or directory from the pod to a local path."
-    )]
+    /// Download a file or directory from the pod to a local path.
+    #[tool(name = "download")]
     async fn download(
         &self,
         params: Parameters<DownloadParams>,
@@ -643,10 +633,8 @@ impl RemoteKernelsServer {
         Ok(CallToolResult::success(vec![Content::text(result)]))
     }
 
-    #[tool(
-        name = "shutdown_kernel",
-        description = "Shut down a kernel and free its resources."
-    )]
+    /// Shut down a kernel and free its resources.
+    #[tool(name = "shutdown_kernel")]
     async fn shutdown_kernel(
         &self,
         params: Parameters<KernelIdParams>,
@@ -684,10 +672,8 @@ impl RemoteKernelsServer {
         ))]))
     }
 
-    #[tool(
-        name = "interrupt",
-        description = "Interrupt the currently running execution in a kernel."
-    )]
+    /// Interrupt the currently running execution in a kernel.
+    #[tool(name = "interrupt")]
     async fn interrupt(
         &self,
         params: Parameters<KernelIdParams>,
@@ -714,10 +700,8 @@ impl RemoteKernelsServer {
         ))]))
     }
 
-    #[tool(
-        name = "restart_kernel",
-        description = "Restart a kernel (clears all state but preserves the kernel ID)."
-    )]
+    /// Restart a kernel (clears all state but preserves the kernel ID).
+    #[tool(name = "restart_kernel")]
     async fn restart_kernel(
         &self,
         params: Parameters<KernelIdParams>,
@@ -849,11 +833,7 @@ impl ServerHandler for RemoteKernelsServer {
         ServerInfo {
             capabilities: ServerCapabilities::builder().enable_tools().build(),
             server_info: Implementation::from_build_env(),
-            instructions: Some(
-                "MCP server for spinning up cloud GPU instances (RunPod) and interacting with persistent Jupyter kernels. \
-                 Use start() to create a pod, execute() to run Python code, and stop()/terminate() to clean up."
-                    .to_string(),
-            ),
+            instructions: Some(descriptions::SERVER_INSTRUCTIONS.to_string()),
             ..Default::default()
         }
     }

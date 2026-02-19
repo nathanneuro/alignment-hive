@@ -2,6 +2,7 @@
 #![allow(clippy::module_name_repetitions)]
 
 mod config;
+mod descriptions;
 mod heartbeat;
 mod jupyter;
 mod notebook;
