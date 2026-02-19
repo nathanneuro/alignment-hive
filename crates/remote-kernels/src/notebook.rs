@@ -12,14 +12,18 @@ pub struct Notebook {
 }
 
 impl Notebook {
-    /// Create a new notebook for a kernel.
-    pub fn new(project_dir: &Path, kernel_id: &str) -> anyhow::Result<Self> {
+    /// Create a new notebook for a kernel. If `name` is provided, it's used in the filename;
+    /// otherwise falls back to a short prefix of the kernel ID.
+    pub fn new(project_dir: &Path, kernel_id: &str, name: Option<&str>) -> anyhow::Result<Self> {
         let dir = project_dir.join(".claude/remote-kernels/notebooks");
         std::fs::create_dir_all(&dir)?;
 
         let timestamp = chrono::Local::now().format("%Y%m%d-%H%M%S");
-        let short_id = &kernel_id[..8.min(kernel_id.len())];
-        let path = dir.join(format!("{timestamp}_{short_id}.ipynb"));
+        let label = match name {
+            Some(n) => sanitize_filename(n),
+            None => kernel_id[..8.min(kernel_id.len())].to_string(),
+        };
+        let path = dir.join(format!("{timestamp}_{label}.ipynb"));
 
         let notebook = Self {
             path,
@@ -88,6 +92,18 @@ fn split_source(code: &str) -> Vec<String> {
             }
         })
         .collect()
+}
+
+/// Sanitize a user-provided name for use in a filename.
+/// Replaces non-alphanumeric characters (except hyphens and underscores) with underscores,
+/// and truncates to a reasonable length.
+fn sanitize_filename(name: &str) -> String {
+    let sanitized: String = name
+        .chars()
+        .map(|c| if c.is_alphanumeric() || c == '-' || c == '_' { c } else { '_' })
+        .collect();
+    let trimmed = sanitized.trim_matches('_');
+    trimmed[..trimmed.len().min(64)].to_string()
 }
 
 /// Build notebook output cells from execution output.

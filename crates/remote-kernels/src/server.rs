@@ -38,6 +38,12 @@ pub struct StartParams {
 pub struct EmptyParams {}
 
 #[derive(Debug, Deserialize, JsonSchema)]
+pub struct CreateKernelParams {
+    /// Human-readable name for the kernel (used in notebook filename).
+    pub name: Option<String>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
 pub struct KernelIdParams {
     /// The kernel ID to operate on.
     pub kernel_id: String,
@@ -237,7 +243,7 @@ impl RemoteKernelsServer {
                 pod.kernel_ids.push(kernel_id.clone());
                 pod.kernel_connections.insert(kernel_id.clone(), conn);
 
-                if let Ok(nb) = crate::notebook::Notebook::new(&project_dir, &kernel_id) {
+                if let Ok(nb) = crate::notebook::Notebook::new(&project_dir, &kernel_id, None) {
                     pod.notebooks.insert(kernel_id.clone(), nb);
                 }
             }
@@ -466,8 +472,10 @@ impl RemoteKernelsServer {
     )]
     async fn create_kernel(
         &self,
-        _params: Parameters<EmptyParams>,
+        params: Parameters<CreateKernelParams>,
     ) -> Result<CallToolResult, McpError> {
+        let name = params.0.name;
+
         let state = self.state.lock().await;
         let Some(pod_state) = &state.pod else {
             return Ok(CallToolResult::error(vec![Content::text(
@@ -501,14 +509,20 @@ impl RemoteKernelsServer {
                 pod.kernel_ids.push(kernel_id.clone());
                 pod.kernel_connections.insert(kernel_id.clone(), conn);
 
-                if let Ok(nb) = crate::notebook::Notebook::new(&project_dir, &kernel_id) {
+                if let Ok(nb) =
+                    crate::notebook::Notebook::new(&project_dir, &kernel_id, name.as_deref())
+                {
                     pod.notebooks.insert(kernel_id.clone(), nb);
                 }
             }
         }
 
+        let label = match &name {
+            Some(n) => format!("{kernel_id} ({n})"),
+            None => kernel_id.clone(),
+        };
         Ok(CallToolResult::success(vec![Content::text(format!(
-            "Kernel created: {kernel_id}"
+            "Kernel created: {label}"
         ))]))
     }
 
