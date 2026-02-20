@@ -57,7 +57,48 @@ Create the destination directories (`.github/workflows`, `.github/scripts`, `.gi
 | `assets/issue-prompt.md` | `.github/prompts/issue.md` |
 | `assets/pr-review-prompt.md` | `.github/prompts/pr-review.md` |
 
-## Step 3: Check Permissions
+## Step 3: Configure Plugins
+
+The GitHub Action supports installing plugins from marketplaces. Detect the user's installed plugins and offer to include them in CI.
+
+### Detect installed plugins
+
+Read `.claude/settings.json` and `.claude/settings.local.json` looking for:
+- `enabledPlugins` — all enabled plugins (from any marketplace)
+- `pluginMarketplaces` — all registered marketplaces
+
+### Present findings
+
+Show the user which plugins and marketplaces were detected. Use AskUserQuestion to confirm which plugins to include in CI.
+
+If the user selects no plugins, skip the rest of this step.
+
+### Update workflow files
+
+Replace the `# PLUGINS` comment in both workflow files with `plugin_marketplaces` and `plugins` inputs. Only include marketplaces that have at least one selected plugin. Marketplace references in settings may be shorthand (e.g. `Crazytieguy/alignment-hive`) — convert to full git URLs for the action. Example:
+
+```yaml
+          plugin_marketplaces: |
+            https://github.com/owner/repo.git
+          plugins: |
+            some-plugin@some-marketplace
+```
+
+### Handle secrets
+
+For plugins that need secrets (e.g. `remote-kernels` needs `RUNPOD_API_KEY`), replace the `# PLUGIN_ENV` comment in both workflow files with the required env var lines:
+
+```yaml
+          RUNPOD_API_KEY: ${{ secrets.RUNPOD_API_KEY }}
+```
+
+For unknown plugins, ask the user if any environment variables are needed.
+
+Then offer to set each secret via `gh secret set`, piping the value from the local environment (`.env`, `.env.local`, or shell). If that's not possible, explain how to set it manually in the repo's Settings → Secrets.
+
+If no plugins need secrets, remove the `# PLUGIN_ENV` comment line from both workflow files.
+
+## Step 4: Check Permissions
 
 Read `.claude/settings.json` and `.claude/settings.local.json`. Claude in the GitHub Action uses these for bash permissions. Check if permissions are properly configured using the same heuristic as best-practices:
 - At least 15 allow rules total
@@ -66,7 +107,7 @@ Read `.claude/settings.json` and `.claude/settings.local.json`. Claude in the Gi
 
 Note the result for the summary — do not message the user yet.
 
-## Step 4: Summary
+## Step 5: Summary
 
 List all files created and summarize:
 
@@ -76,7 +117,9 @@ List all files created and summarize:
 - `.github/prompts/issue.md` — issue prompt template
 - `.github/prompts/pr-review.md` — PR review prompt template
 
-**If permissions are unconfigured** (from Step 3), include a warning:
+**If plugins were configured** (from Step 3), list which plugins will be available in CI. Note which secrets were set and remind about any that still need to be added manually.
+
+**If permissions are unconfigured** (from Step 4), include a warning:
 > Claude in the GitHub Action uses your project's `.claude/settings.json` for bash permissions. Without proper permissions, Claude won't be able to run build/test commands autonomously.
 
 Offer to invoke `/mats:permissions` to configure them.

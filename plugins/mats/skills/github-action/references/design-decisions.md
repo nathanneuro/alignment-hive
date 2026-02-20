@@ -42,6 +42,10 @@ Any non-approval review on a PR authored by `claude[bot]` triggers Claude automa
 
 Prompts live in `.github/prompts/` rather than inline in the workflow YAML. This keeps workflow files clean and makes prompt iteration easier (readable diffs). The workflow loads them via `sed` with `{{NUMBER}}`/`{{REPOSITORY}}` placeholder substitution.
 
+## Plugin Support
+
+The action's `plugin_marketplaces` and `plugins` inputs install plugins before Claude runs, giving CI sessions access to the same MCP servers, skills, hooks, and subagents available locally. Plugin tool permissions come from `.claude/settings.json` (which the action reads from the repo), so no `--allowedTools` changes are needed. Plugins that need secrets (e.g. `remote-kernels` needs `RUNPOD_API_KEY`) use GitHub repo secrets passed as env vars on the action step.
+
 ## OAuth Token Model
 
 When using `claude_code_oauth_token`, the action authenticates via the Claude GitHub App which creates its own installation token with `contents: write`, `pull-requests: write`, `issues: write`. The `permissions:` block in the workflow YAML governs the default `GITHUB_TOKEN` which Claude doesn't primarily use. The App token is what matters.
