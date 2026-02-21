@@ -6,9 +6,6 @@ on:
     - cron: '0 17 * * 1-5'
   workflow_dispatch:
 
-permissions:
-  contents: write
-
 jobs:
   post:
     name: Post to Slack
@@ -23,15 +20,20 @@ jobs:
         with:
           bun-version: latest
 
+      - name: Restore state cache
+        uses: actions/cache/restore@v4
+        with:
+          path: release-notes/state.json
+          key: release-notes-state-${{ github.run_id }}
+          restore-keys: release-notes-state-
+
       - name: Post release notes
         run: bun run release-notes/post-to-slack.ts
         env:
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
 
-      - name: Commit state changes
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add release-notes/state.json
-          git diff --staged --quiet || git commit -m "Update release notes state"
-          git push
+      - name: Save state cache
+        uses: actions/cache/save@v4
+        with:
+          path: release-notes/state.json
+          key: release-notes-state-${{ github.run_id }}

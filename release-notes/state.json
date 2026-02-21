@@ -1,8 +1,8 @@
 {
   "lastAnnouncedVersions": {
-    "hive-mind": "0.1.32",
-    "mats": "0.2.2",
+    "hive-mind": "0.1.33",
+    "mats": "0.3.6",
     "llms-fetch-mcp": "0.1.0"
   },
-  "lastRunTimestamp": "2026-02-16T17:14:12.633Z"
+  "lastRunTimestamp": "2026-02-20T17:12:56.000Z"
 }
