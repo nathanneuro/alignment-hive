@@ -1,19 +1,15 @@
 ---
 name: setup
-description: This skill should be used when the user asks to "set up permissions", "configure permissions", "fix permission prompts", "allow commands", "update permissions", "reduce prompts", "stop asking for permission", "enable autonomous mode", "set up autopilot", or mentions Claude Code permission configuration. Also use when permission-related friction is causing workflow issues.
+description: This skill should be used when the user asks to set up or configure Claude Code permissions and/or autopilot/autonomous mode for a project.
 ---
 
-# Claude Code Permissions Configuration
+# Autopilot Setup
 
-Generate permission configurations that enable autonomous Claude operation while maintaining security.
+Configure permissions and autonomous mode so Claude can accomplish tasks end-to-end.
 
 ## Purpose
 
-Proper permissions let Claude work without constant permission prompts while maintaining security. This is essential for:
-- Running Claude asynchronously (without `--dangerously-skip-permissions`)
-- Reducing friction in interactive sessions
-- Steering toward correct patterns (via deny rules)
-- Preventing bypass vectors (via ask rules that require user attention)
+Without proper permissions, Claude either blocks on every command (waiting for approval) or requires `--dangerously-skip-permissions`. This setup provides a secure middle ground: Claude gets the permissions it needs to work autonomously, with appropriate guardrails.
 
 ## Key Principle: Ask vs Deny
 
@@ -24,12 +20,11 @@ Proper permissions let Claude work without constant permission prompts while mai
 ## Workflow Overview
 
 1. Detect project type and audit existing permissions (automatic)
-2. Ask context questions (batch of 5) + edit universally safe commands
-3. Ask script execution preference + edit
-4. Ask web access preference + edit
-5. Ask MCP server permissions + edit (if applicable)
-6. Confirm secrets/git/mode/cleanup + edit
-7. Autonomous mode opt-in
+2. Ask initial preferences (batch of 3) + edit universally safe commands
+3. Ask web access + script execution preferences (batch of 2) + edit
+4. Ask MCP server permissions + edit (if applicable)
+5. Confirm secrets/git/mode/cleanup + edit
+6. Autonomous mode opt-in
 
 ---
 
@@ -85,41 +80,13 @@ The general pattern: any command that takes another command or code string as an
 
 If it's unclear how to run commands in this project (e.g., Python project without pyproject.toml, unusual monorepo structure), ask the user about their preferred toolchain and the correct way to run scripts.
 
-### What to Copy Verbatim vs Adapt
-
-- **Verbatim:** Universally safe commands, git permissions, default mode
-- **Mostly standard:** Web access patterns - structure is standard, just pick the right option
-- **Adapt to project:** Project-specific commands - must match actual scripts and invocation patterns; script execution tier - adapt project name, paths, and package manager
-- **Requires judgment:** Secret protection - check what files actually exist; MCP servers - based on usage patterns
-
 ---
 
-## Step 2: Context Questions + Universally Safe Commands
+## Step 2: Initial Preferences + Universally Safe Commands
 
-Use AskUserQuestion to ask all five questions in a single batch. Answers drive recommendations for later questions.
+Use AskUserQuestion to ask all three questions in a single batch.
 
-### Q1: Sensitive Information
-
-> "Is there sensitive information on this machine or that Claude might work with?"
-
-- **No** - Nothing confidential
-- **Yes** - There's data where leakage would be a problem
-
-### Q2: Valuable Data
-
-> "Could Claude cause damage that's hard to undo? (local files, databases, cloud resources)"
-
-- **No** - Everything is backed up or easily recovered
-- **Yes** - There's valuable data or systems that could be damaged
-
-### Q3: Autonomy Importance
-
-> "How important is it that Claude can work autonomously? (less oversight = some security tradeoff)"
-
-- **Not very** - I can respond to permission prompts when needed
-- **Important** - I need Claude to work independently or run multiple sessions
-
-### Q4: Settings Strategy
+### Q1: Settings Strategy
 
 > "Where should permissions be stored?"
 
@@ -127,22 +94,62 @@ Use AskUserQuestion to ask all five questions in a single batch. Answers drive r
 - **Shared only** - All permissions in settings.json. Works across collaborators and environments.
 - **Personal only** - All permissions in settings.local.json. For projects where collaborators have existing preferences.
 
-### Q5: Universally Safe Commands
+### Q2: Skills
+
+Detect available skills from the system prompt (which lists all available skills).
+
+> "Allow all skills without permission requests?"
+
+- **Yes (Recommended)** - All skills can be used freely
+- **Specific skills only** - Only allow specific skills: [list detected skills]
+
+### Q3: Universally Safe Commands
 
 > "Add universally safe commands? (read-only inspection, safe utilities, git status/diff/log)"
 
 - **Yes (Recommended)** - Standard set of read-only commands that are safe in any project
 - **No** - Start from scratch, I'll configure manually
 
-### Edit Immediately After (if user confirmed universally safe commands)
+### Edit: Skills
+
+**Determine target file based on settings strategy:**
+- Split: → settings.local.json (skills may vary per collaborator)
+- Shared only: → settings.json
+- Personal only: → settings.local.json
+
+If user chose "Yes" (all skills):
+
+```json
+{
+  "permissions": {
+    "allow": [
+      "Skill"
+    ]
+  }
+}
+```
+
+If user chose "Specific skills only", list individual skills:
+
+```json
+{
+  "permissions": {
+    "allow": [
+      "Skill(plugin-name:skill-name)",
+      "Skill(plugin-name:other-skill)",
+      "Skill(local-skill)"
+    ]
+  }
+}
+```
+
+### Edit: Universally Safe Commands (if user confirmed)
 
 **Determine target file based on settings strategy:**
 - Split or Shared only: → settings.json
 - Personal only: → settings.local.json
 
-**Edit 1: Universally Safe Commands**
-
-Note the wildcard patterns - always use `cmd` + `cmd *` (never `cmd*`). Exception: use `cmd:*` for commands that receive heredoc arguments (e.g., `git commit:*`), since ` *` fails to match heredoc syntax.
+Copy verbatim. Note the wildcard patterns - always use `cmd` + `cmd *` (never `cmd*`). Exception: use `cmd:*` for commands that receive heredoc arguments (e.g., `git commit:*`), since ` *` fails to match heredoc syntax.
 
 If hive-mind plugin is detected, also include:
 - `Bash(hive-mind)`
@@ -178,8 +185,6 @@ If hive-mind plugin is detected, also include:
       "Bash(mkdir *)",
       "Bash(grep *)",
       "Bash(rg *)",
-      "Bash(awk *)",
-      "Bash(sed -n *)",
       "Bash(jq *)",
       "Bash(yq *)",
       "Bash(sort)",
@@ -189,7 +194,6 @@ If hive-mind plugin is detected, also include:
       "Bash(cut *)",
       "Bash(tr *)",
       "Bash(printf *)",
-      "Bash(tee *)",
       "Bash(md5sum *)",
       "Bash(sha256sum *)",
       "Bash(base64 *)",
@@ -208,20 +212,12 @@ If hive-mind plugin is detected, also include:
       "Bash(pgrep *)",
       "Bash(nvidia-smi)",
       "Bash(nvidia-smi *)",
-      "Bash(printenv)",
-      "Bash(printenv *)",
       "Bash(id)",
       "Bash(hostname)",
       "Bash(uptime)",
       "Bash(sleep *)",
       "Bash(export *)",
       "Bash(test *)",
-      "Bash(man *)",
-      "Bash(less *)",
-      "Bash(readlink *)",
-      "Bash(curl *://localhost*)",
-      "Bash(curl *://127.0.0.1*)",
-      "Bash(curl *://0.0.0.0*)",
       "Bash(git status)",
       "Bash(git status *)",
       "Bash(git diff)",
@@ -260,7 +256,6 @@ If hive-mind plugin is detected, also include:
       "Bash(xargs dirname *)",
       "Bash(xargs grep *)",
       "Bash(xargs cut *)",
-      "Bash(xargs sed -n *)",
       "Bash(xargs -I{} cat *)",
       "Bash(xargs -I{} file *)",
       "Bash(xargs -I{} head *)",
@@ -273,104 +268,133 @@ If hive-mind plugin is detected, also include:
       "Bash(xargs -I{} basename *)",
       "Bash(xargs -I{} dirname *)",
       "Bash(xargs -I{} grep *)",
-      "Bash(xargs -I{} cut *)",
-      "Bash(xargs -I{} sed -n *)",
-      "Skill"
+      "Bash(xargs -I{} cut *)"
+    ],
+    "ask": [
+      "Bash(find * -exec *)",
+      "Bash(find * -execdir *)"
     ],
     "deny": [
-      "Bash(for *)",
-      "Bash(while *)",
-      "Bash(until *)",
       "Bash(timeout *)",
       "Bash(env *)",
       "Bash(bash -c *)",
       "Bash(sh -c *)",
       "Bash(zsh -c *)",
-      "Bash(find * -exec *)",
-      "Bash(find * -execdir *)",
-      "Bash(awk *system\\(*)",
-      "Bash(xargs awk *system\\(*)",
-      "Bash(xargs -I{} awk *system\\(*)",
       "Bash(xargs sh *)",
       "Bash(xargs -I{} sh *)",
       "Bash(xargs bash *)",
       "Bash(xargs -I{} bash *)",
-      "Bash(cat)",
       "Bash(git -C *)"
     ]
   }
 }
 ```
 
-**Edit 2: CLAUDE.md Bash Operations Guidance** (to CLAUDE.md for split/shared, CLAUDE.local.md for personal)
-
-Add basic bash operations guidance that applies regardless of script execution tier:
-
-```markdown
-## Bash Operations
-
-Complex bash syntax is hard for Claude Code to permission correctly. Keep commands simple.
-
-Simple operations are fine: `|`, `||`, `&&`, `>` redirects.
-
-For bulk operations on multiple files, use xargs:
-- Plain: `ls *.md | xargs wc -l`
-- With placeholder: `ls *.md | xargs -I{} head -1 {}`
-
-Avoid string interpolation (`$()`, backticks, `${}`), heredocs, loops, and advanced xargs flags (`-P`, `-L`, `-n`) - these require scripts or simpler alternatives.
-
-**Patterns:**
-- File creation: Write tool, not `cat << 'EOF' > file`
-- Env vars: `export VAR=val && command`, not `VAR=val command` or `env VAR=val command`
-- Bulk operations: `ls *.md | xargs wc -l`, not `for f in *.md; do cmd "$f"; done`
-- Parallel/batched xargs: use scripts, not `xargs -P4` or `xargs -L1`
-- Per-item shell logic: use scripts, not `xargs sh -c '...'`
-- Git: `git <command>`, not `git -C <path> <command>` (breaks permissions)
-
-Before starting work that requires specific Bash commands, check `.claude/settings.json` and `.claude/settings.local.json` for allowed commands.
-
-If a command that should be allowed is denied, or if project structure changes significantly, ask about running `/autopilot:setup` to update settings.
-```
-
 ---
 
-## Step 3: Script Execution Question + Edit
+## Step 3: Web Access + Script Execution Questions + Edit
 
-### Recommendation Mapping
+Use AskUserQuestion to ask both questions in a single batch.
 
-Use the context answers to determine the recommended option:
+### Web Access Question
 
-| Hard to undo? | Autonomy important? | Recommend |
-|----------------|---------------------|-----------|
-| Yes | Yes | Temp folder scripts |
-| Yes | No | Project scripts only |
-| No | Yes | Full execution |
-| No | No | Temp folder scripts |
+> "What level of web access do you want?"
 
-### Question
+**Options:**
 
-> "What level of script execution do you want to allow?"
+- **WebFetch + WebSearch (Recommended)** - All domains via built-in tools. Built-in prompt injection protections.
 
-**Options (mark recommended based on mapping above):**
+- **Specific domains only** - Only documentation sites relevant to the project. For when prompt injection protection must be absolute.
 
-- **No scripts** - Only linting/formatting. Testing requires permission prompts. *Test files could be edited to run unintended code.*
+### Script Execution Question
 
-- **Project scripts only** - Only scripts defined in package.json/pyproject.toml, plus any detected in scripts/. *Permission prompts for one-off scripts.*
+> "What level of script execution do you want? Higher tiers increase exposure to data exfiltration or loss from prompt injection."
 
-- **Temp folder scripts** - Scripts in `/tmp/claude-execution-allowed/<project>/` allowed. *One permission prompt per session when first writing there. Enables arbitrary code execution.*
+**Options:**
 
-- **Full execution** - `uv run *`, `bun run *`, `bash scripts/*` fully allowed. *Enables arbitrary code execution via the package manager.*
+- **No scripts** - Only lint/format/typecheck. No ad-hoc script execution.
+
+- **Project scripts only** - Can run project-defined scripts (test, build, etc.) but not ad-hoc scripts.
+
+- **Temp folder scripts (Recommended)** - Scripting access controlled per-session. Claude asks once, you decide whether this session needs it.
+
+- **Full execution** - Can run ad-hoc scripts directly. Always available, no per-session gate.
 
 ### Edit Immediately After
 
-Based on the user's choice, edit the appropriate settings file(s) and CLAUDE.md/CLAUDE.local.md.
+Based on the user's choice, edit the appropriate settings file(s).
 
 **Determine target files based on settings strategy:**
-- Split: project-specific commands → settings.json (shared infrastructure), script tier permissions → settings.local.json (personal preference), guidance → CLAUDE.local.md
-- Shared only: everything → settings.json, guidance → CLAUDE.md
-- Personal only: everything → settings.local.json, guidance → CLAUDE.local.md
+- Split: project-specific commands → settings.json (shared infrastructure), script tier permissions → settings.local.json (personal preference)
+- Shared only: everything → settings.json
+- Personal only: everything → settings.local.json
 
-**Edit 1: Project-Specific Commands** (to settings.json for split/shared, settings.local.json for personal)
+**Web access edit:** — Pick option; specific domains requires judgment.
+
+**For "WebFetch + WebSearch":**
+
+```json
+{
+  "permissions": {
+    "allow": [
+      "WebFetch",
+      "WebSearch"
+    ]
+  }
+}
+```
+
+**For "Specific domains only":**
+
+Generate 10+ relevant documentation domains based on project type:
+
+Example for a TypeScript/React project:
+
+```json
+{
+  "permissions": {
+    "allow": [
+      "WebFetch(domain:react.dev)",
+      "WebFetch(domain:typescriptlang.org)",
+      "WebFetch(domain:developer.mozilla.org)",
+      "WebFetch(domain:nodejs.org)",
+      "WebFetch(domain:bun.sh)",
+      "WebFetch(domain:vitejs.dev)",
+      "WebFetch(domain:tailwindcss.com)",
+      "WebFetch(domain:ui.shadcn.com)",
+      "WebFetch(domain:tanstack.com)",
+      "WebFetch(domain:zod.dev)",
+      "WebFetch(domain:trpc.io)",
+      "WebFetch(domain:nextjs.org)",
+      "WebSearch"
+    ]
+  }
+}
+```
+
+Example for a Python ML project:
+
+```json
+{
+  "permissions": {
+    "allow": [
+      "WebFetch(domain:docs.python.org)",
+      "WebFetch(domain:pytorch.org)",
+      "WebFetch(domain:numpy.org)",
+      "WebFetch(domain:pandas.pydata.org)",
+      "WebFetch(domain:scikit-learn.org)",
+      "WebFetch(domain:huggingface.co)",
+      "WebFetch(domain:wandb.ai)",
+      "WebFetch(domain:docs.ray.io)",
+      "WebFetch(domain:jax.readthedocs.io)",
+      "WebFetch(domain:einops.rocks)",
+      "WebSearch"
+    ]
+  }
+}
+```
+
+**Edit 1: Project-Specific Commands** (to settings.json for split/shared, settings.local.json for personal) — Adapt to project.
 
 Based on detected package manager, add commands for enumerated scripts. These are **examples** - adapt to the actual project structure, scripts, and invocation patterns.
 
@@ -480,7 +504,7 @@ Note: `uv sync`, `uv add`, `uv remove` are left on default ask - rarely needed m
 
 Note: `cargo add`, `cargo remove` are left on default ask.
 
-**Edit 3: Script Execution Permissions** (to settings.local.json for split strategy, otherwise per strategy)
+**Edit 2: Script Execution Permissions** (to settings.local.json for split strategy, otherwise per strategy) — Adapt to project.
 
 **For "Full execution" tier:**
 
@@ -528,240 +552,25 @@ Use the project name in the path:
 
 **For "Project scripts only" and "No scripts" tiers:** No additional script permissions.
 
-**Edit 4: CLAUDE.md or CLAUDE.local.md guidance**
+**CLAUDE.md guidance for "Temp folder scripts" tier:**
 
-Add to whichever file corresponds to where script permissions were stored.
-
-**For "Full execution" tier:**
+Add to CLAUDE.md (split/shared) or CLAUDE.local.md (personal):
 
 ```markdown
-## Running Commands
+## Ad-hoc Scripts
 
-Run scripts via `[package-manager] run <script>`. Available scripts: [list enumerated scripts].
-
-Non-bash scripts run with `[package-manager] run [scripts/]<script-name>`. Bash scripts run with `bash [scripts/]<script-name>`.
-
-For string interpolation, heredocs, loops, or advanced xargs flags, write a script in `[scripts/]` instead.
-```
-
-**For "Temp folder scripts" tier:**
-
-```markdown
-## Running Commands
-
-Run scripts via `[package-manager] run <script>`. Available scripts: [list enumerated scripts].
-
-**Ad-hoc scripts:** Only `/tmp/claude-execution-allowed/[project-name]/` is approved for ad-hoc scripts. Non-bash scripts run with `[package-manager] run /tmp/claude-execution-allowed/[project-name]/<script-name>`. Bash scripts run with `bash /tmp/claude-execution-allowed/[project-name]/<script-name>`.
-
-When you create a new reusable script, offer to add a permission for it. Example: "I created scripts/analyze.py. Want me to add `Bash(uv run scripts/analyze.py *)` to your permissions?"
-
-For string interpolation, heredocs, loops, or advanced xargs flags, write a script in `/tmp/claude-execution-allowed/[project-name]/` instead.
-```
-
-**For "Project scripts only" tier:**
-
-```markdown
-## Running Commands
-
-Run scripts via `[package-manager] run <script>`. Available scripts: [list enumerated scripts].
-
-When you create a new reusable script, offer to add a permission for it. Example: "I created scripts/analyze.py. Want me to add `Bash(uv run scripts/analyze.py *)` to your permissions?"
-
-For complex bash operations, break into simpler sequential commands or ask the user for help.
-```
-
-**For "No scripts" tier:**
-
-```markdown
-## Running Commands
-
-Run lint/typecheck via `[package-manager] run <script>`. Available scripts: [list the lint/format/typecheck scripts that were configured].
-
-For anything requiring code execution beyond linting, ask the user for help or request a permission change.
-
-For complex bash operations, break into simpler sequential commands or ask the user for help.
+Only `/tmp/claude-execution-allowed/[project-name]/` is approved for ad-hoc scripts. Non-bash scripts run with `[package-manager] run /tmp/claude-execution-allowed/[project-name]/<script-name>`. Bash scripts run with `bash /tmp/claude-execution-allowed/[project-name]/<script-name>`.
 ```
 
 ---
 
-## Step 4: Web Access Question + Edit
+## Step 4: MCP Server Permissions (if detected)
 
-### Recommendation Mapping
-
-| Sensitive data? | Recommend |
-|-----------------|-----------|
-| Yes | WebFetch + WebSearch |
-| No | Full GET with curl |
-
-### Question
-
-> "What level of web access do you want?"
-
-**Options (mark recommended based on mapping above):**
-
-- **Specific domains only** - Only documentation sites relevant to the project. *Claude can't fetch arbitrary URLs.*
-
-- **WebFetch + WebSearch** - All domains via built-in tools. *Built-in prompt injection protections.*
-
-- **Full GET with curl** - Adds curl for GET requests. *No built-in protections - some prompt injection risk.*
-
-### Edit Immediately After
-
-**For "Full GET with curl":**
-
-```json
-{
-  "permissions": {
-    "allow": [
-      "WebFetch",
-      "WebSearch",
-      "Bash(curl)",
-      "Bash(curl *)"
-    ],
-    "ask": [
-      "Bash(curl -X POST *)",
-      "Bash(curl -X PUT *)",
-      "Bash(curl -X DELETE *)",
-      "Bash(curl -X PATCH *)",
-      "Bash(curl * -X POST)",
-      "Bash(curl * -X PUT)",
-      "Bash(curl * -X DELETE)",
-      "Bash(curl * -X PATCH)",
-      "Bash(curl * -X POST *)",
-      "Bash(curl * -X PUT *)",
-      "Bash(curl * -X DELETE *)",
-      "Bash(curl * -X PATCH *)",
-      "Bash(curl -XPOST *)",
-      "Bash(curl -XPUT *)",
-      "Bash(curl -XDELETE *)",
-      "Bash(curl -XPATCH *)",
-      "Bash(curl * -XPOST)",
-      "Bash(curl * -XPUT)",
-      "Bash(curl * -XDELETE)",
-      "Bash(curl * -XPATCH)",
-      "Bash(curl * -XPOST *)",
-      "Bash(curl * -XPUT *)",
-      "Bash(curl * -XDELETE *)",
-      "Bash(curl * -XPATCH *)",
-      "Bash(curl --request POST *)",
-      "Bash(curl --request PUT *)",
-      "Bash(curl --request DELETE *)",
-      "Bash(curl --request PATCH *)",
-      "Bash(curl * --request POST)",
-      "Bash(curl * --request PUT)",
-      "Bash(curl * --request DELETE)",
-      "Bash(curl * --request PATCH)",
-      "Bash(curl * --request POST *)",
-      "Bash(curl * --request PUT *)",
-      "Bash(curl * --request DELETE *)",
-      "Bash(curl * --request PATCH *)",
-      "Bash(curl -d*)",
-      "Bash(curl * -d*)",
-      "Bash(curl --data*)",
-      "Bash(curl * --data*)",
-      "Bash(curl -F*)",
-      "Bash(curl * -F*)",
-      "Bash(curl --form*)",
-      "Bash(curl * --form*)",
-      "Bash(curl -T *)",
-      "Bash(curl * -T *)",
-      "Bash(curl --upload-file *)",
-      "Bash(curl * --upload-file *)",
-      "Bash(curl -H *)",
-      "Bash(curl * -H *)",
-      "Bash(curl --header *)",
-      "Bash(curl * --header *)",
-      "Bash(curl -b *)",
-      "Bash(curl * -b *)",
-      "Bash(curl --cookie *)",
-      "Bash(curl * --cookie *)",
-      "Bash(curl -u *)",
-      "Bash(curl * -u *)",
-      "Bash(curl --user *)",
-      "Bash(curl * --user *)"
-    ]
-  }
-}
-```
-
-Also add to CLAUDE.md/CLAUDE.local.md (same file as other guidance):
-
-```markdown
-Use `curl` when you need to see the full response content (WebFetch summarizes).
-```
-
-**For "WebFetch + WebSearch":**
-
-```json
-{
-  "permissions": {
-    "allow": [
-      "WebFetch",
-      "WebSearch"
-    ]
-  }
-}
-```
-
-**For "Specific domains only":**
-
-Generate 10+ relevant documentation domains based on project type:
-
-Example for a TypeScript/React project:
-
-```json
-{
-  "permissions": {
-    "allow": [
-      "WebFetch(domain:react.dev)",
-      "WebFetch(domain:typescriptlang.org)",
-      "WebFetch(domain:developer.mozilla.org)",
-      "WebFetch(domain:nodejs.org)",
-      "WebFetch(domain:bun.sh)",
-      "WebFetch(domain:vitejs.dev)",
-      "WebFetch(domain:tailwindcss.com)",
-      "WebFetch(domain:ui.shadcn.com)",
-      "WebFetch(domain:tanstack.com)",
-      "WebFetch(domain:zod.dev)",
-      "WebFetch(domain:trpc.io)",
-      "WebFetch(domain:nextjs.org)",
-      "WebSearch"
-    ]
-  }
-}
-```
-
-Example for a Python ML project:
-
-```json
-{
-  "permissions": {
-    "allow": [
-      "WebFetch(domain:docs.python.org)",
-      "WebFetch(domain:pytorch.org)",
-      "WebFetch(domain:numpy.org)",
-      "WebFetch(domain:pandas.pydata.org)",
-      "WebFetch(domain:scikit-learn.org)",
-      "WebFetch(domain:huggingface.co)",
-      "WebFetch(domain:wandb.ai)",
-      "WebFetch(domain:docs.ray.io)",
-      "WebFetch(domain:jax.readthedocs.io)",
-      "WebFetch(domain:einops.rocks)",
-      "WebSearch"
-    ]
-  }
-}
-```
-
----
-
-## Step 5: MCP Server Permissions (if detected)
-
-For each MCP server found in `.mcp.json`, ask in a **question batch** (one question per server) whether to allow all tools or leave on default (permission prompt per tool).
+For each MCP server found in `.mcp.json`, ask in a **question batch** (one question per server) whether to allow all tools or leave on default (permission request per tool).
 
 Use judgment for recommendations:
-- **Many tools used mid-session** (playwright, puppeteer for testing) → recommend allow
-- **Accesses private data or modifies external state** (database, Airtable, email) → recommend default ask
+- **Needed for autonomous operation** (playwright, remote-kernels) → recommend allow
+- **Only needed with user oversight** (database, Airtable, email) → recommend default (permission request per use, auto-denied in autonomous mode)
 
 ### Edit Immediately After
 
@@ -772,7 +581,7 @@ For servers the user approved for full access:
   "permissions": {
     "allow": [
       "mcp__playwright__*",
-      "mcp__puppeteer__*"
+      "mcp__remote-kernels__*"
     ]
   }
 }
@@ -782,7 +591,7 @@ Servers left on default ask don't need any configuration.
 
 ---
 
-## Step 6: Final Batch - Secrets + Git + Mode + Cleanup
+## Step 5: Final Batch - Secrets + Git + Mode + Cleanup
 
 Ask these questions in a single batch, then make a single edit.
 
@@ -795,10 +604,10 @@ Ask these questions in a single batch, then make a single edit.
 
 ### Git
 
-> "Allow Claude to stage and commit without permission prompts?"
+> "Allow Claude to stage and commit without permission requests?"
 
 - **Yes** - Commits can always be reverted, this isn't push permission
-- **No** - Permission prompt for each commit
+- **No** - Permission request for each commit
 
 ### Default Mode
 
@@ -816,22 +625,7 @@ Ask these questions in a single batch, then make a single edit.
 
 ### Edit for All
 
-**Git permissions (if user allows commits):**
-
-Note: `git commit` uses `:*` instead of ` *` because commit messages use heredoc syntax, which ` *` fails to match.
-
-```json
-{
-  "permissions": {
-    "allow": [
-      "Bash(git add *)",
-      "Bash(git commit:*)"
-    ]
-  }
-}
-```
-
-**Secret protection (if user confirmed):**
+**Secret protection (if user confirmed):** — Requires judgment, check what files actually exist.
 
 Check what secret files actually exist - don't use a generic list:
 
@@ -849,23 +643,22 @@ Check what secret files actually exist - don't use a generic list:
 
 Note: `.env.example` and `.env.test` are typically safe to read.
 
-For projects with credentials files (if present):
+**Git permissions (if user allows commits):** — Copy verbatim.
+
+Note: `git commit` uses `:*` instead of ` *` because commit messages use heredoc syntax, which ` *` fails to match.
 
 ```json
 {
   "permissions": {
-    "deny": [
-      "Read(**/.aws/credentials)",
-      "Read(**/.ssh/*)",
-      "Read(**/*.pem)",
-      "Read(**/*_rsa)",
-      "Read(**/*_ed25519)"
+    "allow": [
+      "Bash(git add *)",
+      "Bash(git commit:*)"
     ]
   }
 }
 ```
 
-**Default mode (if user chose plan mode):**
+**Default mode (if user chose plan mode):** — Copy verbatim.
 
 ```json
 {
@@ -877,20 +670,20 @@ For projects with credentials files (if present):
 
 ---
 
-## Step 7: Autonomous Mode Opt-In
+## Step 6: Autonomous Mode Opt-In
 
 After all permissions are configured, explain autonomous mode and ask for explicit consent.
 
 **Explanation to give the user:**
 
-The autopilot plugin includes an autonomous mode that changes how Claude handles permission prompts when you're in `acceptEdits` mode:
+The autopilot plugin includes an autonomous mode that changes how Claude handles permission requests when you're in `acceptEdits` mode:
 
 - **Without autonomous mode:** Claude blocks on every unpermitted command, waiting for you to approve or deny each one.
-- **With autonomous mode:** Unpermitted commands are automatically denied. Claude will try alternatives or explain what it needs instead of blocking.
+- **With autonomous mode:** Unpermitted commands are automatically denied. Claude will try alternatives or propose adding a permission instead of blocking.
 
-This means you can leave Claude running unattended in `acceptEdits` mode. If Claude needs a command that isn't in the allow list, it will either find another way or stop and tell you what it needs.
+This means you can leave Claude running unattended in `acceptEdits` mode.
 
-**Important:** If you need to approve a one-off command that isn't in your allow list, switch out of `acceptEdits` mode first (use the permission mode selector). Autonomous mode only activates in `acceptEdits` mode.
+**Important:** If you need to approve a one-off command that isn't in your allow list, switch out of `acceptEdits` mode first (toggle with Shift+Tab). Autonomous mode only activates in `acceptEdits` mode.
 
 **Question:**
 
@@ -912,7 +705,3 @@ Write `.claude/autopilot/state.json`:
 - If no: `{"autonomous_mode": false}`
 
 Ensure `.claude/autopilot/` is gitignored — add to `.gitignore` if not already covered.
-
-## Completion
-
-Write the plugin version to `.claude/autopilot/setup-version` so the SessionStart hook can detect version changes in the future.

@@ -48,7 +48,7 @@ if [ -n "$rule_content" ]; then
 elif [ "$has_suggestions" = "true" ]; then
   message="Command denied in autonomous mode."
 else
-  message="Command denied in autonomous mode. Command likely contains command substitution or unsupported syntax."
+  message="Command denied in autonomous mode. Command likely contains command substitution or ambiguous syntax."
 fi
 
 # Output deny decision using jq to ensure valid JSON

@@ -1,11 +1,15 @@
 ---
 name: add-permission
-description: Use when a Bash command is denied and you cannot proceed without it. Helps propose a specific permission rule to add to the project's allow list.
+description: Use when a tool call is denied and you cannot proceed without it. Helps propose a specific permission rule to add to the project's allow list.
 ---
 
 # Add Permission
 
-Propose a specific permission rule when a command is denied in autonomous mode.
+Propose a specific permission rule when a tool call is denied in autonomous mode.
+
+## First Step: Check Existing Permissions
+
+Before proposing a new rule, read `.claude/settings.json` and `.claude/settings.local.json` to check if there's an already-permitted way to accomplish the same objective.
 
 ## Permission Syntax
 
@@ -31,7 +35,7 @@ Always use `cmd` + `cmd *` pairs (never `cmd*`). Exception: `cmd:*` for heredoc 
 
 ## When to Edit Settings Directly
 
-If the permission is obvious, safe, and follows least privilege — edit `.claude/settings.json` or `.claude/settings.local.json` directly. This triggers its own permission prompt, so the user sees and approves the proposed rule.
+If the permission is obvious, safe, and follows least privilege — edit `.claude/settings.json` or `.claude/settings.local.json` directly. This triggers its own permission request, so the user sees and approves the proposed rule.
 
 Check which file has the existing permissions and add to the appropriate one.
 
