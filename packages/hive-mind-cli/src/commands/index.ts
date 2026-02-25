@@ -107,10 +107,10 @@ function formatPendingSession(
 
   let statusIcon: string;
   let statusText: string;
-  if (eligibility.excluded) {
+  if (eligibility.status === 'excluded') {
     statusIcon = colors.yellow('✗');
     statusText = colors.yellow('excluded'.padEnd(14));
-  } else if (eligibility.eligible) {
+  } else if (eligibility.status === 'ready') {
     statusIcon = colors.green('✓');
     statusText = colors.green('ready'.padEnd(14));
   } else {
@@ -222,14 +222,16 @@ async function showPendingStatus(cwd: string): Promise<number> {
 
   console.log('');
 
-  const ready = pendingInfos.filter((s) => s.eligibility.eligible).length;
-  const pending = pendingInfos.filter((s) => !s.eligibility.eligible && !s.eligibility.excluded).length;
-  const excluded = pendingInfos.filter((s) => s.eligibility.excluded).length;
+  const ready = pendingInfos.filter((s) => s.eligibility.status === 'ready').length;
+  const pending = pendingInfos.filter((s) => s.eligibility.status === 'pending').length;
+  const excluded = pendingInfos.filter((s) => s.eligibility.status === 'excluded').length;
+  const uploaded = pendingInfos.filter((s) => s.eligibility.status === 'uploaded').length;
 
   const statusSummary: Array<string> = [];
   if (ready > 0) statusSummary.push(`${ready} ready`);
   if (pending > 0) statusSummary.push(`${pending} pending`);
   if (excluded > 0) statusSummary.push(`${excluded} excluded`);
+  if (uploaded > 0) statusSummary.push(`${uploaded} uploaded`);
   console.log(indexCmd.total(pendingInfos.length, statusSummary.join(', ')));
 
   if (ready > 0) {

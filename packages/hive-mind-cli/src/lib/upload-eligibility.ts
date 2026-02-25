@@ -24,8 +24,7 @@ export async function getAuthIssuedAt(): Promise<number | null> {
 export interface SessionEligibility {
   sessionId: string;
   meta: HiveMindMeta;
-  eligible: boolean;
-  excluded: boolean;
+  status: 'ready' | 'pending' | 'excluded' | 'uploaded';
   eligibleAt: number | null;
   reason: string;
 }
@@ -34,25 +33,11 @@ export function checkSessionEligibility(meta: HiveMindMeta, authIssuedAt: number
   const sessionId = meta.sessionId;
 
   if (meta.excluded) {
-    return {
-      sessionId,
-      meta,
-      eligible: false,
-      excluded: true,
-      eligibleAt: null,
-      reason: 'Excluded by user',
-    };
+    return { sessionId, meta, status: 'excluded' as const, eligibleAt: null, reason: 'Excluded by user' };
   }
 
   if (meta.uploadedAt && meta.extractedAt <= meta.uploadedAt) {
-    return {
-      sessionId,
-      meta,
-      eligible: false,
-      excluded: false,
-      eligibleAt: null,
-      reason: 'Already uploaded',
-    };
+    return { sessionId, meta, status: 'uploaded' as const, eligibleAt: null, reason: 'Already uploaded' };
   }
 
   const now = Date.now();
@@ -66,24 +51,10 @@ export function checkSessionEligibility(meta: HiveMindMeta, authIssuedAt: number
   if (now < eligibleAt) {
     const remainingMs = eligibleAt - now;
     const remainingHours = Math.ceil(remainingMs / (60 * 60 * 1000));
-    return {
-      sessionId,
-      meta,
-      eligible: false,
-      excluded: false,
-      eligibleAt,
-      reason: `Eligible in ${remainingHours}h`,
-    };
+    return { sessionId, meta, status: 'pending' as const, eligibleAt, reason: `Eligible in ${remainingHours}h` };
   }
 
-  return {
-    sessionId,
-    meta,
-    eligible: true,
-    excluded: false,
-    eligibleAt,
-    reason: 'Ready for upload',
-  };
+  return { sessionId, meta, status: 'ready' as const, eligibleAt, reason: 'Ready for upload' };
 }
 
 export async function getAllSessionsEligibility(cwd: string): Promise<Array<SessionEligibility>> {
@@ -108,14 +79,4 @@ export async function getAllSessionsEligibility(cwd: string): Promise<Array<Sess
   );
 
   return results.filter((r): r is SessionEligibility => r !== null);
-}
-
-export async function getEligibleSessions(cwd: string): Promise<Array<SessionEligibility>> {
-  const all = await getAllSessionsEligibility(cwd);
-  return all.filter((s) => s.eligible);
-}
-
-export async function getPendingSessions(cwd: string): Promise<Array<SessionEligibility>> {
-  const all = await getAllSessionsEligibility(cwd);
-  return all.filter((s) => !s.eligible && !s.excluded);
 }

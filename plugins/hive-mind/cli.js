@@ -17928,24 +17928,10 @@ async function getAuthIssuedAt() {
 function checkSessionEligibility(meta3, authIssuedAt) {
   const sessionId = meta3.sessionId;
   if (meta3.excluded) {
-    return {
-      sessionId,
-      meta: meta3,
-      eligible: false,
-      excluded: true,
-      eligibleAt: null,
-      reason: "Excluded by user"
-    };
+    return { sessionId, meta: meta3, status: "excluded", eligibleAt: null, reason: "Excluded by user" };
   }
   if (meta3.uploadedAt && meta3.extractedAt <= meta3.uploadedAt) {
-    return {
-      sessionId,
-      meta: meta3,
-      eligible: false,
-      excluded: false,
-      eligibleAt: null,
-      reason: "Already uploaded"
-    };
+    return { sessionId, meta: meta3, status: "uploaded", eligibleAt: null, reason: "Already uploaded" };
   }
   const now = Date.now();
   const rawMtimeMs = new Date(meta3.rawMtime).getTime();
@@ -17955,23 +17941,9 @@ function checkSessionEligibility(meta3, authIssuedAt) {
   if (now < eligibleAt) {
     const remainingMs = eligibleAt - now;
     const remainingHours = Math.ceil(remainingMs / (60 * 60 * 1000));
-    return {
-      sessionId,
-      meta: meta3,
-      eligible: false,
-      excluded: false,
-      eligibleAt,
-      reason: `Eligible in ${remainingHours}h`
-    };
+    return { sessionId, meta: meta3, status: "pending", eligibleAt, reason: `Eligible in ${remainingHours}h` };
   }
-  return {
-    sessionId,
-    meta: meta3,
-    eligible: true,
-    excluded: false,
-    eligibleAt,
-    reason: "Ready for upload"
-  };
+  return { sessionId, meta: meta3, status: "ready", eligibleAt, reason: "Ready for upload" };
 }
 
 // src/commands/index.ts
@@ -18024,10 +17996,10 @@ function formatPendingSession(info, idPrefix, dateDisplay, maxAgentWidth, maxMsg
   const agentCol = agentText.padEnd(maxAgentWidth);
   let statusIcon;
   let statusText;
-  if (eligibility.excluded) {
+  if (eligibility.status === "excluded") {
     statusIcon = colors.yellow("\u2717");
     statusText = colors.yellow("excluded".padEnd(14));
-  } else if (eligibility.eligible) {
+  } else if (eligibility.status === "ready") {
     statusIcon = colors.green("\u2713");
     statusText = colors.green("ready".padEnd(14));
   } else {
@@ -18117,9 +18089,10 @@ async function showPendingStatus(cwd) {
     console.log(formatPendingSession(info, prefix, dateDisplay, maxAgentWidth, maxMsgWidth, maxDateWidth));
   }
   console.log("");
-  const ready = pendingInfos.filter((s) => s.eligibility.eligible).length;
-  const pending = pendingInfos.filter((s) => !s.eligibility.eligible && !s.eligibility.excluded).length;
-  const excluded = pendingInfos.filter((s) => s.eligibility.excluded).length;
+  const ready = pendingInfos.filter((s) => s.eligibility.status === "ready").length;
+  const pending = pendingInfos.filter((s) => s.eligibility.status === "pending").length;
+  const excluded = pendingInfos.filter((s) => s.eligibility.status === "excluded").length;
+  const uploaded = pendingInfos.filter((s) => s.eligibility.status === "uploaded").length;
   const statusSummary = [];
   if (ready > 0)
     statusSummary.push(`${ready} ready`);
@@ -18127,6 +18100,8 @@ async function showPendingStatus(cwd) {
     statusSummary.push(`${pending} pending`);
   if (excluded > 0)
     statusSummary.push(`${excluded} excluded`);
+  if (uploaded > 0)
+    statusSummary.push(`${uploaded} uploaded`);
   console.log(indexCmd.total(pendingInfos.length, statusSummary.join(", ")));
   if (ready > 0) {
     console.log("");
@@ -19862,9 +19837,6 @@ async function sessionStart() {
       messages.push(hook.schemaErrors(errorCount, schemaErrors.length, allErrors));
     }
   }
-  if (status.errors) {
-    collectedErrors.push(...status.errors);
-  }
   let userHasAlias = false;
   if (status.authenticated) {
     try {
@@ -19882,13 +19854,16 @@ async function sessionStart() {
   } else if (status.user) {
     messages.push(hook.loggedIn(getUserDisplayName(status.user)));
   }
+  if (status.errors) {
+    collectedErrors.push(...status.errors);
+  }
   if (status.authenticated && extractedSessions.length > 0) {
     try {
       const authIssuedAt = await getAuthIssuedAt();
       const nonAgentSessions = extractedSessions.filter((s) => !s.meta.agentId);
       const eligibilityResults = nonAgentSessions.map((s) => checkSessionEligibility(s.meta, authIssuedAt));
-      const pending = eligibilityResults.filter((s) => !s.eligible && !s.excluded);
-      const eligible = eligibilityResults.filter((s) => s.eligible);
+      const pending = eligibilityResults.filter((s) => s.status === "pending");
+      const eligible = eligibilityResults.filter((s) => s.status === "ready");
       const showPendingMsg = pending.length > 1;
       if (showPendingMsg) {
         const uploadTimes = pending.map((s) => s.eligibleAt).filter((t) => t !== null);
@@ -20149,7 +20124,7 @@ async function deviceAuthFlow() {
   return 1;
 }
 async function showStatus() {
-  const status = await checkAuthStatus(false);
+  const status = await checkAuthStatus(true);
   if (status.authenticated && status.user) {
     const displayName = getUserDisplayName(status.user);
     console.log(errors3.loginStatusYes(displayName));

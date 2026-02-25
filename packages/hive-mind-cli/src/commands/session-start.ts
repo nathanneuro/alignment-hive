@@ -184,8 +184,8 @@ export async function sessionStart(): Promise<number> {
       const nonAgentSessions = extractedSessions.filter((s) => !s.meta.agentId);
       const eligibilityResults = nonAgentSessions.map((s) => checkSessionEligibility(s.meta, authIssuedAt));
 
-      const pending = eligibilityResults.filter((s) => !s.eligible && !s.excluded);
-      const eligible = eligibilityResults.filter((s) => s.eligible);
+      const pending = eligibilityResults.filter((s) => s.status === 'pending');
+      const eligible = eligibilityResults.filter((s) => s.status === 'ready');
 
       const showPendingMsg = pending.length > 1;
       if (showPendingMsg) {
