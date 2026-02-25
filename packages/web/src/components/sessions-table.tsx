@@ -1,5 +1,5 @@
-import { Link } from '@tanstack/react-router';
-import { formatProject, formatRelativeTime } from '~/lib/format';
+import { Link } from "@tanstack/react-router";
+import { formatProject, formatRelativeTime } from "~/lib/format";
 
 interface Session {
   _id: string;
@@ -27,7 +27,11 @@ interface SessionsTableProps {
   loading?: boolean;
 }
 
-export function SessionsTable({ sessions, showUserColumn = true, loading }: SessionsTableProps) {
+export function SessionsTable({
+  sessions,
+  showUserColumn = true,
+  loading,
+}: SessionsTableProps) {
   if (loading) {
     return (
       <div className="flex h-32 items-center justify-center rounded-lg border border-border bg-card">
@@ -54,7 +58,7 @@ export function SessionsTable({ sessions, showUserColumn = true, loading }: Sess
           {sessions.map((session) => (
             <tr
               key={session._id}
-              className={`relative ${session.upload ? 'hover:bg-muted/50' : 'opacity-50'}`}
+              className={`relative ${session.upload ? "hover:bg-muted/50" : "opacity-50"}`}
             >
               <td className="px-4 py-3 font-mono text-sm">
                 {session.upload ? (
@@ -84,20 +88,26 @@ export function SessionsTable({ sessions, showUserColumn = true, loading }: Sess
                   )}
                 </td>
               )}
-              <td className="px-4 py-3 text-sm text-muted-foreground truncate max-w-[200px]" title={session.project}>
+              <td
+                className="px-4 py-3 text-sm text-muted-foreground truncate max-w-[200px]"
+                title={session.project}
+              >
                 {formatProject(session.project)}
               </td>
               <td className="px-4 py-3 text-sm tabular-nums">
                 {session.lineCount}
               </td>
               <td className="px-4 py-3 text-sm tabular-nums text-muted-foreground">
-                {session.childSessionCount || '—'}
+                {session.childSessionCount || "—"}
               </td>
               <td className="px-4 py-3 text-sm text-muted-foreground">
                 {formatRelativeTime(session.lastHeartbeat)}
               </td>
-              <td className="px-4 py-3 text-sm text-muted-foreground truncate max-w-[300px]" title={session.summary}>
-                {session.summary || '—'}
+              <td
+                className="px-4 py-3 text-sm text-muted-foreground truncate max-w-[300px]"
+                title={session.summary}
+              >
+                {session.summary || "—"}
               </td>
             </tr>
           ))}
@@ -107,7 +117,11 @@ export function SessionsTable({ sessions, showUserColumn = true, loading }: Sess
   );
 }
 
-function formatUserName(user: { firstName?: string; lastName?: string; email: string }): string {
+function formatUserName(user: {
+  firstName?: string;
+  lastName?: string;
+  email: string;
+}): string {
   if (user.firstName && user.lastName) {
     return `${user.firstName} ${user.lastName}`;
   }

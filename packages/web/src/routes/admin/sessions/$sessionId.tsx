@@ -1,11 +1,11 @@
-import { useEffect, useState } from 'react';
-import { useQuery } from 'convex-helpers/react/cache';
-import { Link, createFileRoute } from '@tanstack/react-router';
-import { api } from '../../../../convex/_generated/api';
-import { SessionViewer } from '~/components/session-viewer';
-import { formatProject, formatSessionId } from '~/lib/format';
+import { useEffect, useState } from "react";
+import { useQuery } from "convex-helpers/react/cache";
+import { Link, createFileRoute } from "@tanstack/react-router";
+import { api } from "../../../../convex/_generated/api";
+import { SessionViewer } from "~/components/session-viewer";
+import { formatProject, formatSessionId } from "~/lib/format";
 
-export const Route = createFileRoute('/admin/sessions/$sessionId')({
+export const Route = createFileRoute("/admin/sessions/$sessionId")({
   component: SessionDetail,
 });
 
@@ -177,11 +177,11 @@ function useSessionModel(contentUrl: string | null): string | undefined {
       .then((res) => res.text())
       .then((text) => {
         const counts = new Map<string, number>();
-        for (const line of text.split('\n')) {
+        for (const line of text.split("\n")) {
           if (!line.includes('"assistant"')) continue;
           try {
             const entry = JSON.parse(line);
-            if (entry.type === 'assistant' && entry.message?.model) {
+            if (entry.type === "assistant" && entry.message?.model) {
               const m = entry.message.model;
               counts.set(m, (counts.get(m) ?? 0) + 1);
             }
@@ -204,4 +204,3 @@ function useSessionModel(contentUrl: string | null): string | undefined {
 
   return model;
 }
-

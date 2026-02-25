@@ -1,13 +1,13 @@
-import { createFileRoute, useSearch } from '@tanstack/react-router';
-import { getAuth, getSignInUrl } from '@workos/authkit-tanstack-react-start';
-import { z } from 'zod';
-import { Button } from '@/components/ui/button';
+import { createFileRoute, useSearch } from "@tanstack/react-router";
+import { getAuth, getSignInUrl } from "@workos/authkit-tanstack-react-start";
+import { z } from "zod";
+import { Button } from "@/components/ui/button";
 
 const searchSchema = z.object({
   error: z.string().optional().catch(undefined),
 });
 
-export const Route = createFileRoute('/')({
+export const Route = createFileRoute("/")({
   component: Home,
   validateSearch: searchSchema,
   loader: async () => {
@@ -51,7 +51,7 @@ function Home() {
                 </Button>
                 <div className="text-sm text-center">
                   <p className="text-slate-600 dark:text-slate-400">
-                    To request access,{' '}
+                    To request access,{" "}
                     <a
                       href="mailto:yoav.tzfati@gmail.com"
                       className="text-blue-600 dark:text-blue-400 underline hover:text-blue-700 dark:hover:text-blue-300"
@@ -72,13 +72,14 @@ function Home() {
 }
 
 function ErrorBanner() {
-  const { error } = useSearch({ from: '/' });
+  const { error } = useSearch({ from: "/" });
 
   if (!error) return null;
 
-  const message = error === 'auth_failed'
-    ? 'Authentication failed. Please try again.'
-    : 'Something went wrong.';
+  const message =
+    error === "auth_failed"
+      ? "Authentication failed. Please try again."
+      : "Something went wrong.";
 
   return (
     <div className="fixed bottom-4 right-4 max-w-sm p-4 bg-red-50 dark:bg-red-950/20 border border-red-200 dark:border-red-800 rounded-lg shadow-lg">

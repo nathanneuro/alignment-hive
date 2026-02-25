@@ -7,7 +7,7 @@ import { indexCmd, usage } from '../lib/messages';
 import { colors, printError } from '../lib/output';
 import { checkSessionEligibility, getAuthIssuedAt } from '../lib/upload-eligibility';
 import type { SessionEligibility } from '../lib/upload-eligibility';
-import type { ContentBlock, HiveMindMeta, KnownEntry, LogicalBlock, ParsedSession  } from '@alignment-hive/shared';
+import type { ContentBlock, HiveMindMeta, KnownEntry, LogicalBlock, ParsedSession } from '@alignment-hive/shared';
 
 interface SessionInfo {
   meta: HiveMindMeta;

@@ -1,10 +1,10 @@
-import { usePaginatedQuery } from 'convex-helpers/react/cache';
-import { Link, createFileRoute } from '@tanstack/react-router';
-import { api } from '../../../../convex/_generated/api';
-import { SessionsTable } from '~/components/sessions-table';
-import { formatProject, formatRelativeTime } from '~/lib/format';
+import { usePaginatedQuery } from "convex-helpers/react/cache";
+import { Link, createFileRoute } from "@tanstack/react-router";
+import { api } from "../../../../convex/_generated/api";
+import { SessionsTable } from "~/components/sessions-table";
+import { formatProject, formatRelativeTime } from "~/lib/format";
 
-export const Route = createFileRoute('/admin/users/$userId')({
+export const Route = createFileRoute("/admin/users/$userId")({
   component: UserDetail,
 });
 
@@ -15,19 +15,19 @@ function UserDetail() {
   const { results, status, loadMore } = usePaginatedQuery(
     api.admin.getUserSessions,
     { userId },
-    { initialNumItems: 50 }
+    { initialNumItems: 50 },
   );
 
   // Get user info from listUsers query
   const usersData = usePaginatedQuery(
     api.admin.listUsers,
     {},
-    { initialNumItems: 100 }
+    { initialNumItems: 100 },
   );
 
   const user = usersData.results.find((u) => u.workosId === userId);
 
-  if (!user && usersData.status === 'Exhausted') {
+  if (!user && usersData.status === "Exhausted") {
     return (
       <div className="flex items-center justify-center py-12">
         <div className="text-destructive">User not found</div>
@@ -63,9 +63,7 @@ function UserDetail() {
             <div>
               <span className="text-muted-foreground">Last active: </span>
               <span className="font-medium">
-                {user.lastActive
-                  ? formatRelativeTime(user.lastActive)
-                  : '—'}
+                {user.lastActive ? formatRelativeTime(user.lastActive) : "—"}
               </span>
             </div>
           </div>
@@ -73,7 +71,7 @@ function UserDetail() {
             <div className="mt-4">
               <span className="text-sm text-muted-foreground">Projects: </span>
               <span className="text-sm">
-                {user.projects.map(formatProject).join(', ')}
+                {user.projects.map(formatProject).join(", ")}
               </span>
             </div>
           )}
@@ -83,9 +81,13 @@ function UserDetail() {
       <div className="space-y-4">
         <h2 className="text-lg font-semibold text-foreground">Sessions</h2>
 
-        <SessionsTable sessions={results} showUserColumn={false} loading={status === 'LoadingFirstPage'} />
+        <SessionsTable
+          sessions={results}
+          showUserColumn={false}
+          loading={status === "LoadingFirstPage"}
+        />
 
-        {status === 'CanLoadMore' && (
+        {status === "CanLoadMore" && (
           <button
             onClick={() => loadMore(50)}
             className="w-full rounded-lg border border-border bg-card py-2 text-sm text-muted-foreground hover:bg-muted"

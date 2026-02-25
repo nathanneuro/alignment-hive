@@ -1,8 +1,13 @@
-import { Link, Outlet, createFileRoute, redirect } from '@tanstack/react-router';
-import { getSignInUrl } from '@workos/authkit-tanstack-react-start';
-import { Authenticated, AuthLoading } from 'convex/react';
+import {
+  Link,
+  Outlet,
+  createFileRoute,
+  redirect,
+} from "@tanstack/react-router";
+import { getSignInUrl } from "@workos/authkit-tanstack-react-start";
+import { Authenticated, AuthLoading } from "convex/react";
 
-export const Route = createFileRoute('/admin')({
+export const Route = createFileRoute("/admin")({
   beforeLoad: async ({ context, location }) => {
     // Access auth state from root beforeLoad
     const { userId, isAdmin } = context;
@@ -12,7 +17,7 @@ export const Route = createFileRoute('/admin')({
       throw redirect({ href });
     }
     if (!isAdmin) {
-      throw redirect({ to: '/' });
+      throw redirect({ to: "/" });
     }
   },
   component: AdminLayout,

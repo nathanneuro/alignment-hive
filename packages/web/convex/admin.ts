@@ -1,15 +1,15 @@
-import { paginationOptsValidator } from 'convex/server';
-import { v } from 'convex/values';
-import { parseKnownEntry, type KnownEntry } from '@alignment-hive/shared';
-import type { Id } from './_generated/dataModel';
+import { paginationOptsValidator } from "convex/server";
+import { v } from "convex/values";
+import { parseKnownEntry, type KnownEntry } from "@alignment-hive/shared";
+import type { Id } from "./_generated/dataModel";
 import {
   query,
   internalAction,
   internalMutation,
   internalQuery,
-} from './_generated/server';
-import { internal } from './_generated/api';
-import { requireAdmin } from './lib/admin';
+} from "./_generated/server";
+import { internal } from "./_generated/api";
+import { requireAdmin } from "./lib/admin";
 
 export const listSessions = query({
   args: {
@@ -23,44 +23,44 @@ export const listSessions = query({
     const identity = await requireAdmin(ctx);
     if (!identity) {
       // Return empty results during SSR
-      return { page: [], isDone: true, continueCursor: '' };
+      return { page: [], isDone: true, continueCursor: "" };
     }
 
     // Load all known users (small table) for filtering and display
-    const allUsers = await ctx.db.query('users').collect();
+    const allUsers = await ctx.db.query("users").collect();
     const userMap = new Map(allUsers.map((u) => [u.workosId, u]));
 
     // Build query with filters applied before pagination
     let sessionsQuery = ctx.db
-      .query('sessions')
-      .withIndex('by_parent_session_id', (q) =>
-        q.eq('parentSessionId', undefined)
+      .query("sessions")
+      .withIndex("by_parent_session_id", (q) =>
+        q.eq("parentSessionId", undefined),
       )
-      .order('desc');
+      .order("desc");
 
     if (args.excludeUserIds?.length) {
       for (const id of args.excludeUserIds) {
         sessionsQuery = sessionsQuery.filter((q) =>
-          q.neq(q.field('userId'), id)
+          q.neq(q.field("userId"), id),
         );
       }
     }
     if (args.excludeUnknownUsers) {
       sessionsQuery = sessionsQuery.filter((q) =>
-        q.or(...allUsers.map((u) => q.eq(q.field('userId'), u.workosId)))
+        q.or(...allUsers.map((u) => q.eq(q.field("userId"), u.workosId))),
       );
     }
     if (args.excludeProjects?.length) {
       for (const project of args.excludeProjects) {
         sessionsQuery = sessionsQuery.filter((q) =>
-          q.neq(q.field('project'), project)
+          q.neq(q.field("project"), project),
         );
       }
     }
     if (args.hasUpload !== undefined) {
       sessionsQuery = args.hasUpload
-        ? sessionsQuery.filter((q) => q.neq(q.field('upload'), undefined))
-        : sessionsQuery.filter((q) => q.eq(q.field('upload'), undefined));
+        ? sessionsQuery.filter((q) => q.neq(q.field("upload"), undefined))
+        : sessionsQuery.filter((q) => q.eq(q.field("upload"), undefined));
     }
 
     const paginatedSessions = await sessionsQuery.paginate(args.paginationOpts);
@@ -69,13 +69,13 @@ export const listSessions = query({
     const childCounts = await Promise.all(
       paginatedSessions.page.map(async (session) => {
         const children = await ctx.db
-          .query('sessions')
-          .withIndex('by_parent_session_id', (q) =>
-            q.eq('parentSessionId', session.sessionId)
+          .query("sessions")
+          .withIndex("by_parent_session_id", (q) =>
+            q.eq("parentSessionId", session.sessionId),
           )
           .collect();
         return children.length;
-      })
+      }),
     );
 
     const sessionsWithUsers = paginatedSessions.page.map((session, i) => ({
@@ -101,8 +101,8 @@ export const getSession = query({
     }
 
     const session = await ctx.db
-      .query('sessions')
-      .withIndex('by_session_id', (q) => q.eq('sessionId', args.sessionId))
+      .query("sessions")
+      .withIndex("by_session_id", (q) => q.eq("sessionId", args.sessionId))
       .first();
 
     if (!session) return null;
@@ -114,15 +114,15 @@ export const getSession = query({
 
     // Get user info
     const user = await ctx.db
-      .query('users')
-      .withIndex('by_workos_id', (q) => q.eq('workosId', session.userId))
+      .query("users")
+      .withIndex("by_workos_id", (q) => q.eq("workosId", session.userId))
       .first();
 
     // Get user session count
     const userSessions = user
       ? await ctx.db
-          .query('sessions')
-          .withIndex('by_user_id', (q) => q.eq('userId', session.userId))
+          .query("sessions")
+          .withIndex("by_user_id", (q) => q.eq("userId", session.userId))
           .collect()
       : [];
 
@@ -137,18 +137,18 @@ export const getSession = query({
     // Get parent session info if this is an agent session
     const parentSession = session.parentSessionId
       ? await ctx.db
-          .query('sessions')
-          .withIndex('by_session_id', (q) =>
-            q.eq('sessionId', session.parentSessionId!)
+          .query("sessions")
+          .withIndex("by_session_id", (q) =>
+            q.eq("sessionId", session.parentSessionId!),
           )
           .first()
       : null;
 
     // Get child agent sessions
     const childSessions = await ctx.db
-      .query('sessions')
-      .withIndex('by_parent_session_id', (q) =>
-        q.eq('parentSessionId', args.sessionId)
+      .query("sessions")
+      .withIndex("by_parent_session_id", (q) =>
+        q.eq("parentSessionId", args.sessionId),
       )
       .collect();
 
@@ -168,27 +168,27 @@ export const listUsers = query({
     const identity = await requireAdmin(ctx);
     if (!identity) {
       // Return empty results during SSR
-      return { page: [], isDone: true, continueCursor: '' };
+      return { page: [], isDone: true, continueCursor: "" };
     }
 
     const paginatedUsers = await ctx.db
-      .query('users')
-      .order('desc')
+      .query("users")
+      .order("desc")
       .paginate(args.paginationOpts);
 
     // Get stats for each user
     const usersWithStats = await Promise.all(
       paginatedUsers.page.map(async (user) => {
         const sessions = await ctx.db
-          .query('sessions')
-          .withIndex('by_user_id', (q) => q.eq('userId', user.workosId))
+          .query("sessions")
+          .withIndex("by_user_id", (q) => q.eq("userId", user.workosId))
           .collect();
 
         const projects = [...new Set(sessions.map((s) => s.project))];
         const lastSession = sessions.reduce(
           (latest, s) =>
             !latest || s.lastHeartbeat > latest.lastHeartbeat ? s : latest,
-          null as (typeof sessions)[0] | null
+          null as (typeof sessions)[0] | null,
         );
 
         return {
@@ -198,7 +198,7 @@ export const listUsers = query({
           projects,
           lastActive: lastSession?.lastHeartbeat ?? null,
         };
-      })
+      }),
     );
 
     return {
@@ -217,31 +217,31 @@ export const getUserSessions = query({
     const identity = await requireAdmin(ctx);
     if (!identity) {
       // Return empty results during SSR
-      return { page: [], isDone: true, continueCursor: '' };
+      return { page: [], isDone: true, continueCursor: "" };
     }
 
     const paginatedSessions = await ctx.db
-      .query('sessions')
-      .withIndex('by_user_id', (q) => q.eq('userId', args.userId))
-      .order('desc')
+      .query("sessions")
+      .withIndex("by_user_id", (q) => q.eq("userId", args.userId))
+      .order("desc")
       .paginate(args.paginationOpts);
 
     // Filter out agent sessions
     const filteredPage = paginatedSessions.page.filter(
-      (s) => !s.parentSessionId
+      (s) => !s.parentSessionId,
     );
 
     // Get child session counts
     const childCounts = await Promise.all(
       filteredPage.map(async (session) => {
         const children = await ctx.db
-          .query('sessions')
-          .withIndex('by_parent_session_id', (q) =>
-            q.eq('parentSessionId', session.sessionId)
+          .query("sessions")
+          .withIndex("by_parent_session_id", (q) =>
+            q.eq("parentSessionId", session.sessionId),
           )
           .collect();
         return children.length;
-      })
+      }),
     );
 
     const sessionsWithCounts = filteredPage.map((session, i) => ({
@@ -260,7 +260,7 @@ export const getUserSessions = query({
 
 export const updateSessionSummary = internalMutation({
   args: {
-    sessionId: v.id('sessions'),
+    sessionId: v.id("sessions"),
     summary: v.string(),
   },
   handler: async (ctx, { sessionId, summary }) => {
@@ -270,22 +270,22 @@ export const updateSessionSummary = internalMutation({
 
 function extractSummaryFromEntries(entries: KnownEntry[]): string | undefined {
   const summaries = entries.filter(
-    (e): e is KnownEntry & { type: 'summary' } => e.type === 'summary'
+    (e): e is KnownEntry & { type: "summary" } => e.type === "summary",
   );
   if (summaries.length > 0) {
     return summaries.at(-1)!.summary;
   }
   // Fallback: first user prompt
   for (const entry of entries) {
-    if (entry.type !== 'user') continue;
+    if (entry.type !== "user") continue;
     const content = entry.message.content;
     if (!content) continue;
     let text: string | undefined;
-    if (typeof content === 'string') {
+    if (typeof content === "string") {
       text = content;
     } else if (Array.isArray(content)) {
       for (const block of content) {
-        if (block.type === 'text' && 'text' in block) {
+        if (block.type === "text" && "text" in block) {
           text = block.text;
           break;
         }
@@ -293,8 +293,8 @@ function extractSummaryFromEntries(entries: KnownEntry[]): string | undefined {
     }
     if (text) {
       const trimmed = text.trim();
-      if (trimmed.startsWith('<')) continue;
-      const firstLine = trimmed.split('\n')[0].trim();
+      if (trimmed.startsWith("<")) continue;
+      const firstLine = trimmed.split("\n")[0].trim();
       if (firstLine) {
         return firstLine.length > 100
           ? `${firstLine.slice(0, 97)}...`
@@ -307,10 +307,12 @@ function extractSummaryFromEntries(entries: KnownEntry[]): string | undefined {
 
 export const backfillSummaries = internalAction({
   args: {},
-  handler: async (ctx): Promise<{ updated: number; skipped: number; total: number }> => {
-    const sessions = await ctx.runQuery(
-      internal.admin.sessionsNeedingBackfill
-    ) as Array<{ _id: Id<'sessions'>; upload: { storageId: Id<'_storage'> } }>;
+  handler: async (
+    ctx,
+  ): Promise<{ updated: number; skipped: number; total: number }> => {
+    const sessions = (await ctx.runQuery(
+      internal.admin.sessionsNeedingBackfill,
+    )) as Array<{ _id: Id<"sessions">; upload: { storageId: Id<"_storage"> } }>;
 
     let updated = 0;
     let skipped = 0;
@@ -326,7 +328,7 @@ export const backfillSummaries = internalAction({
       const text = await response.text();
       const entries: KnownEntry[] = [];
 
-      for (const line of text.split('\n')) {
+      for (const line of text.split("\n")) {
         if (!line.trim()) continue;
         try {
           const parsed = JSON.parse(line);
@@ -356,7 +358,7 @@ export const backfillSummaries = internalAction({
 export const sessionsNeedingBackfill = internalQuery({
   args: {},
   handler: async (ctx) => {
-    const sessions = await ctx.db.query('sessions').collect();
+    const sessions = await ctx.db.query("sessions").collect();
     return sessions.filter((s) => s.upload && !s.summary);
   },
 });

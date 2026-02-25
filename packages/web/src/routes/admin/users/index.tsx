@@ -1,9 +1,9 @@
-import { usePaginatedQuery } from 'convex-helpers/react/cache';
-import { Link, createFileRoute } from '@tanstack/react-router';
-import { api } from '../../../../convex/_generated/api';
-import { formatRelativeTime } from '~/lib/format';
+import { usePaginatedQuery } from "convex-helpers/react/cache";
+import { Link, createFileRoute } from "@tanstack/react-router";
+import { api } from "../../../../convex/_generated/api";
+import { formatRelativeTime } from "~/lib/format";
 
-export const Route = createFileRoute('/admin/users/')({
+export const Route = createFileRoute("/admin/users/")({
   component: UsersList,
 });
 
@@ -11,7 +11,7 @@ function UsersList() {
   const { results, status, loadMore, isLoading } = usePaginatedQuery(
     api.admin.listUsers,
     {},
-    { initialNumItems: 50 }
+    { initialNumItems: 50 },
   );
 
   if (isLoading) {
@@ -62,18 +62,16 @@ function UsersList() {
                 </td>
                 <td className="px-4 py-3 text-sm text-muted-foreground">
                   {user.projects.length > 0 ? (
-                    <span title={user.projects.join(', ')}>
+                    <span title={user.projects.join(", ")}>
                       {user.projects.length} project
-                      {user.projects.length !== 1 ? 's' : ''}
+                      {user.projects.length !== 1 ? "s" : ""}
                     </span>
                   ) : (
                     <span className="text-muted-foreground/50">—</span>
                   )}
                 </td>
                 <td className="px-4 py-3 text-sm text-muted-foreground">
-                  {user.lastActive
-                    ? formatRelativeTime(user.lastActive)
-                    : '—'}
+                  {user.lastActive ? formatRelativeTime(user.lastActive) : "—"}
                 </td>
               </tr>
             ))}
@@ -81,7 +79,7 @@ function UsersList() {
         </table>
       </div>
 
-      {status === 'CanLoadMore' && (
+      {status === "CanLoadMore" && (
         <button
           onClick={() => loadMore(50)}
           className="w-full rounded-lg border border-border bg-card py-2 text-sm text-muted-foreground hover:bg-muted"

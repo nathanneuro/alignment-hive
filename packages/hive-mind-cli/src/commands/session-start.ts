@@ -123,7 +123,9 @@ export async function sessionStart(): Promise<number> {
 
   const tAfterParallel = performance.now();
   if (verbose()) {
-    console.error(`[session-start] parallel block (checkAllSessions+auth): ${(tAfterParallel - tBeforeParallel).toFixed(0)}ms`);
+    console.error(
+      `[session-start] parallel block (checkAllSessions+auth): ${(tAfterParallel - tBeforeParallel).toFixed(0)}ms`,
+    );
   }
 
   let newSessionIds: Array<string> = [];
@@ -199,7 +201,10 @@ export async function sessionStart(): Promise<number> {
         if (alreadyRunning) {
           messages.push(hook.uploadInProgress(eligible.length));
         } else {
-          const spawned = scheduleAutoUploads(cwd, eligible.map((s) => s.sessionId));
+          const spawned = scheduleAutoUploads(
+            cwd,
+            eligible.map((s) => s.sessionId),
+          );
           if (spawned) {
             messages.push(hook.uploadingSessions(eligible.length, AUTO_UPLOAD_DELAY_MINUTES));
           }
@@ -216,7 +221,7 @@ export async function sessionStart(): Promise<number> {
 
   // Add collected errors to messages
   if (collectedErrors.length > 0) {
-    if (process.env.HIVE_MIND_VERBOSE === "1") {
+    if (process.env.HIVE_MIND_VERBOSE === '1') {
       messages.push(...collectedErrors);
     } else {
       messages.push(hook.errorsOccurred(collectedErrors.length));

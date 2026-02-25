@@ -3,7 +3,7 @@
  * Strips "agent-" prefix and truncates to specified length.
  */
 export function formatSessionId(sessionId: string, maxLength = 8): string {
-  const stripped = sessionId.replace(/^agent-/, '');
+  const stripped = sessionId.replace(/^agent-/, "");
   return stripped.slice(0, maxLength);
 }
 
@@ -35,6 +35,6 @@ export function formatProject(project: string): string {
   if (match) {
     return match[1];
   }
-  const parts = project.split('/');
+  const parts = project.split("/");
   return parts[parts.length - 1] || project;
 }

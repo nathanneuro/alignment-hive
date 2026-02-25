@@ -1,16 +1,26 @@
-import { createRouter } from '@tanstack/react-router';
-import { ConvexQueryClient } from '@convex-dev/react-query';
-import { QueryClient } from '@tanstack/react-query';
-import { setupRouterSsrQueryIntegration } from '@tanstack/react-router-ssr-query';
-import { ConvexProviderWithAuth, ConvexReactClient } from 'convex/react';
-import { ConvexQueryCacheProvider } from 'convex-helpers/react/cache';
-import { AuthKitProvider, useAccessToken, useAuth } from '@workos/authkit-tanstack-react-start/client';
-import { useCallback, useMemo } from 'react';
-import { routeTree } from './routeTree.gen';
-import { Button } from '@/components/ui/button';
+import { createRouter } from "@tanstack/react-router";
+import { ConvexQueryClient } from "@convex-dev/react-query";
+import { QueryClient } from "@tanstack/react-query";
+import { setupRouterSsrQueryIntegration } from "@tanstack/react-router-ssr-query";
+import { ConvexProviderWithAuth, ConvexReactClient } from "convex/react";
+import { ConvexQueryCacheProvider } from "convex-helpers/react/cache";
+import {
+  AuthKitProvider,
+  useAccessToken,
+  useAuth,
+} from "@workos/authkit-tanstack-react-start/client";
+import { useCallback, useMemo } from "react";
+import { routeTree } from "./routeTree.gen";
+import { Button } from "@/components/ui/button";
 
-function DefaultErrorComponent({ error, reset }: { error: Error; reset: () => void }) {
-  const isDev = process.env.NODE_ENV === 'development';
+function DefaultErrorComponent({
+  error,
+  reset,
+}: {
+  error: Error;
+  reset: () => void;
+}) {
+  const isDev = process.env.NODE_ENV === "development";
 
   return (
     <div className="p-8 max-w-xl mx-auto">
@@ -21,7 +31,9 @@ function DefaultErrorComponent({ error, reset }: { error: Error; reset: () => vo
       <Button onClick={reset}>Try again</Button>
       {isDev && (
         <details className="mt-6">
-          <summary className="cursor-pointer text-muted-foreground">Error details</summary>
+          <summary className="cursor-pointer text-muted-foreground">
+            Error details
+          </summary>
           <pre className="mt-2 p-4 bg-muted rounded-md overflow-auto text-sm">
             {error.stack || error.message}
           </pre>
@@ -34,7 +46,7 @@ function DefaultErrorComponent({ error, reset }: { error: Error; reset: () => vo
 export function getRouter() {
   const CONVEX_URL = import.meta.env.VITE_CONVEX_URL;
   if (!CONVEX_URL) {
-    throw new Error('missing VITE_CONVEX_URL env var');
+    throw new Error("missing VITE_CONVEX_URL env var");
   }
   const convex = new ConvexReactClient(CONVEX_URL);
   const convexQueryClient = new ConvexQueryClient(convex);
@@ -52,18 +64,21 @@ export function getRouter() {
 
   const router = createRouter({
     routeTree,
-    defaultPreload: 'intent',
+    defaultPreload: "intent",
     scrollRestoration: true,
     defaultPreloadStaleTime: 0,
-    defaultErrorComponent: ({ error, reset }) => <DefaultErrorComponent error={error} reset={reset} />,
+    defaultErrorComponent: ({ error, reset }) => (
+      <DefaultErrorComponent error={error} reset={reset} />
+    ),
     defaultNotFoundComponent: () => <p>not found</p>,
     context: { queryClient, convexClient: convex, convexQueryClient },
     Wrap: ({ children }) => (
       <AuthKitProvider>
-        <ConvexProviderWithAuth client={convexQueryClient.convexClient} useAuth={useAuthFromWorkOS}>
-          <ConvexQueryCacheProvider>
-            {children}
-          </ConvexQueryCacheProvider>
+        <ConvexProviderWithAuth
+          client={convexQueryClient.convexClient}
+          useAuth={useAuthFromWorkOS}
+        >
+          <ConvexQueryCacheProvider>{children}</ConvexQueryCacheProvider>
         </ConvexProviderWithAuth>
       </AuthKitProvider>
     ),

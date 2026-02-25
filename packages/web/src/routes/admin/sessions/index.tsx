@@ -1,11 +1,11 @@
-import { useEffect, useRef, useState } from 'react';
-import { usePaginatedQuery } from 'convex-helpers/react/cache';
-import { createFileRoute, useNavigate } from '@tanstack/react-router';
-import { api } from '../../../../convex/_generated/api';
-import { SessionsTable } from '~/components/sessions-table';
-import { formatProject } from '~/lib/format';
+import { useEffect, useRef, useState } from "react";
+import { usePaginatedQuery } from "convex-helpers/react/cache";
+import { createFileRoute, useNavigate } from "@tanstack/react-router";
+import { api } from "../../../../convex/_generated/api";
+import { SessionsTable } from "~/components/sessions-table";
+import { formatProject } from "~/lib/format";
 
-type UploadFilter = 'all' | 'uploaded' | 'not-uploaded';
+type UploadFilter = "all" | "uploaded" | "not-uploaded";
 
 interface SessionsSearch {
   upload?: UploadFilter;
@@ -13,7 +13,7 @@ interface SessionsSearch {
   excludeProjects?: string[];
 }
 
-export const Route = createFileRoute('/admin/sessions/')({
+export const Route = createFileRoute("/admin/sessions/")({
   validateSearch: (search: Record<string, unknown>): SessionsSearch => ({
     upload: (search.upload as UploadFilter) || undefined,
     excludeUsers: (search.excludeUsers as string[]) || undefined,
@@ -22,13 +22,13 @@ export const Route = createFileRoute('/admin/sessions/')({
   component: SessionsList,
 });
 
-const UNKNOWN_USERS_KEY = '__unknown__';
+const UNKNOWN_USERS_KEY = "__unknown__";
 
 function SessionsList() {
   const search = Route.useSearch();
   const navigate = useNavigate({ from: Route.fullPath });
 
-  const uploadFilter = search.upload ?? 'all';
+  const uploadFilter = search.upload ?? "all";
   const excludedUserIds = new Set(search.excludeUsers ?? []);
   const excludedProjects = new Set(search.excludeProjects ?? []);
 
@@ -36,7 +36,7 @@ function SessionsList() {
     navigate({
       search: (prev) => ({
         ...prev,
-        upload: value === 'all' ? undefined : value,
+        upload: value === "all" ? undefined : value,
       }),
       replace: true,
     });
@@ -63,27 +63,31 @@ function SessionsList() {
   const usersData = usePaginatedQuery(
     api.admin.listUsers,
     {},
-    { initialNumItems: 100 }
+    { initialNumItems: 100 },
   );
 
   const excludeUnknownUsers = excludedUserIds.has(UNKNOWN_USERS_KEY);
   const excludeUserIdsList = [...excludedUserIds].filter(
-    (id) => id !== UNKNOWN_USERS_KEY
+    (id) => id !== UNKNOWN_USERS_KEY,
   );
   const excludeProjectsList = [...excludedProjects];
 
   const queryArgs = {
-    ...(uploadFilter === 'uploaded' && { hasUpload: true }),
-    ...(uploadFilter === 'not-uploaded' && { hasUpload: false }),
-    ...(excludeUserIdsList.length > 0 && { excludeUserIds: excludeUserIdsList }),
+    ...(uploadFilter === "uploaded" && { hasUpload: true }),
+    ...(uploadFilter === "not-uploaded" && { hasUpload: false }),
+    ...(excludeUserIdsList.length > 0 && {
+      excludeUserIds: excludeUserIdsList,
+    }),
     ...(excludeUnknownUsers && { excludeUnknownUsers: true }),
-    ...(excludeProjectsList.length > 0 && { excludeProjects: excludeProjectsList }),
+    ...(excludeProjectsList.length > 0 && {
+      excludeProjects: excludeProjectsList,
+    }),
   };
 
   const { results, status, loadMore } = usePaginatedQuery(
     api.admin.listSessions,
     queryArgs,
-    { initialNumItems: 50 }
+    { initialNumItems: 50 },
   );
 
   // Collect unique projects from loaded results
@@ -98,13 +102,14 @@ function SessionsList() {
             label="User"
             options={usersData.results.map((u) => ({
               id: u.workosId,
-              label: u.firstName && u.lastName
-                ? `${u.firstName} ${u.lastName}`
-                : u.email,
+              label:
+                u.firstName && u.lastName
+                  ? `${u.firstName} ${u.lastName}`
+                  : u.email,
             }))}
             excludedIds={excludedUserIds}
             onChange={setExcludedUserIds}
-            specialOption={{ id: UNKNOWN_USERS_KEY, label: 'Unknown users' }}
+            specialOption={{ id: UNKNOWN_USERS_KEY, label: "Unknown users" }}
           />
           <MultiSelectFilter
             label="Project"
@@ -130,9 +135,12 @@ function SessionsList() {
         </div>
       </div>
 
-      <SessionsTable sessions={results} loading={status === 'LoadingFirstPage'} />
+      <SessionsTable
+        sessions={results}
+        loading={status === "LoadingFirstPage"}
+      />
 
-      {status === 'CanLoadMore' && (
+      {status === "CanLoadMore" && (
         <button
           onClick={() => loadMore(50)}
           className="w-full rounded-lg border border-border bg-card py-2 text-sm text-muted-foreground hover:bg-muted"
@@ -171,8 +179,8 @@ function MultiSelectFilter({
         setIsOpen(false);
       }
     }
-    document.addEventListener('mousedown', handleClickOutside);
-    return () => document.removeEventListener('mousedown', handleClickOutside);
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
   }, []);
 
   const toggleId = (id: string) => {
@@ -189,7 +197,9 @@ function MultiSelectFilter({
     ...(specialOption ? [specialOption.id] : []),
     ...options.map((o) => o.id),
   ];
-  const selectedCount = allOptionIds.filter((id) => !excludedIds.has(id)).length;
+  const selectedCount = allOptionIds.filter(
+    (id) => !excludedIds.has(id),
+  ).length;
 
   let filterLabel: string;
   if (selectedCount === allOptionIds.length) {

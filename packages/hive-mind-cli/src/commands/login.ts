@@ -93,10 +93,7 @@ async function tryRefresh(): Promise<{ success: boolean; user?: AuthUser }> {
 
   printInfo(msg.refreshing);
 
-  const refreshResult = await refreshToken(
-    authResult.refresh_token,
-    authResult.authenticated_at,
-  );
+  const refreshResult = await refreshToken(authResult.refresh_token, authResult.authenticated_at);
   if (refreshResult && !isErrorResult(refreshResult)) {
     await saveAuthData(refreshResult);
     printSuccess(msg.refreshSuccess);

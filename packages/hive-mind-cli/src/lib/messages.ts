@@ -70,16 +70,11 @@ export const errors = {
   refreshFailed: (status: number): string => `Token refresh failed (${status}). Run /hive-mind:setup to re-login.`,
   readTranscriptsDirFailed: (dir: string, error: string): string =>
     `Failed to read transcripts directory ${dir}: ${error}`,
-  statFailed: (path: string, error: string): string =>
-    `Failed to stat ${path}: ${error}`,
-  parseSessionFailed: (sessionId: string, error: string): string =>
-    `Failed to parse session ${sessionId}: ${error}`,
-  aliasUpdateFailed: (error: string): string =>
-    `Failed to update alias: ${error}`,
-  eligibilityCheckFailed: (error: string): string =>
-    `Failed to check session eligibility: ${error}`,
-  markUploadedFailed: (error: string): string =>
-    `Failed to mark session uploaded: ${error}`,
+  statFailed: (path: string, error: string): string => `Failed to stat ${path}: ${error}`,
+  parseSessionFailed: (sessionId: string, error: string): string => `Failed to parse session ${sessionId}: ${error}`,
+  aliasUpdateFailed: (error: string): string => `Failed to update alias: ${error}`,
+  eligibilityCheckFailed: (error: string): string => `Failed to check session eligibility: ${error}`,
+  markUploadedFailed: (error: string): string => `Failed to mark session uploaded: ${error}`,
   noSessions: 'No sessions found yet. Sessions are extracted automatically when you start Claude Code.',
   noSessionsIn: (dir: string): string => `No sessions in ${dir}`,
   sessionNotFound: (prefix: string): string => `No session matching "${prefix}"`,

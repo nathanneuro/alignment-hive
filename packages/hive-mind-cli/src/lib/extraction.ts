@@ -177,9 +177,7 @@ export const isMetaError = isErrorResult<HiveMindMeta>;
 
 export type ReadSessionResult = { meta: HiveMindMeta; entries: Array<KnownEntry> } | { error: string } | null;
 
-export async function readExtractedSession(
-  extractedPath: string,
-): Promise<ReadSessionResult> {
+export async function readExtractedSession(extractedPath: string): Promise<ReadSessionResult> {
   try {
     const content = await readFile(extractedPath, 'utf-8');
     const lines = content.split('\n').filter((l) => l.trim());

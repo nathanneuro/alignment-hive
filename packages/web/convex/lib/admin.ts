@@ -1,9 +1,9 @@
-import type { QueryCtx, MutationCtx } from '../_generated/server';
+import type { QueryCtx, MutationCtx } from "../_generated/server";
 
 function getAdminEmails(): string[] {
-  const envValue = process.env.ADMIN_EMAILS ?? '';
+  const envValue = process.env.ADMIN_EMAILS ?? "";
   return envValue
-    .split('\n')
+    .split("\n")
     .map((e) => e.trim())
     .filter(Boolean);
 }
@@ -21,7 +21,7 @@ export async function requireAdmin(ctx: QueryCtx | MutationCtx) {
   }
   const adminEmails = getAdminEmails();
   if (!identity.email || !adminEmails.includes(identity.email)) {
-    throw new Error('Not authorized');
+    throw new Error("Not authorized");
   }
   return identity;
 }

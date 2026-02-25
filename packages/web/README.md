@@ -31,6 +31,7 @@ The dev server runs on `http://localhost:3000` and includes both the frontend an
 ### Environment Variables
 
 **For local development** (staging credentials in `.env.local`):
+
 - `WORKOS_CLIENT_ID`: Staging WorkOS client ID
 - `WORKOS_API_KEY`: Staging WorkOS API key
 - `WORKOS_COOKIE_PASSWORD`: Secure 32+ char string for session cookies
@@ -38,16 +39,19 @@ The dev server runs on `http://localhost:3000` and includes both the frontend an
 - `VITE_CONVEX_URL`: Convex dev deployment URL
 
 **For production** (configured in Vercel):
+
 - Production WorkOS credentials
 - Production Convex deployment URL
 
 ### Available Scripts
 
 From repo root:
+
 - `bun run --filter '@alignment-hive/web' lint` - Type check
 - `bun run --filter '@alignment-hive/web' build` - Build for production
 
 From `web/` directory:
+
 - `bun dev` - Start frontend and backend in parallel
 - `bun run dev:frontend` - Just the Vite dev server
 - `bun run dev:backend` - Just the Convex backend

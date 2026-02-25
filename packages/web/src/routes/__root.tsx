@@ -1,21 +1,26 @@
-import { HeadContent, Outlet, Scripts, createRootRouteWithContext } from '@tanstack/react-router';
-import { createServerFn } from '@tanstack/react-start';
-import { getAuth } from '@workos/authkit-tanstack-react-start';
-import appCssUrl from '../app.css?url';
-import type { QueryClient } from '@tanstack/react-query';
-import type { ReactNode } from 'react';
-import type { ConvexReactClient } from 'convex/react';
-import type { ConvexQueryClient } from '@convex-dev/react-query';
+import {
+  HeadContent,
+  Outlet,
+  Scripts,
+  createRootRouteWithContext,
+} from "@tanstack/react-router";
+import { createServerFn } from "@tanstack/react-start";
+import { getAuth } from "@workos/authkit-tanstack-react-start";
+import appCssUrl from "../app.css?url";
+import type { QueryClient } from "@tanstack/react-query";
+import type { ReactNode } from "react";
+import type { ConvexReactClient } from "convex/react";
+import type { ConvexQueryClient } from "@convex-dev/react-query";
 
 function getAdminEmails(): string[] {
-  const envValue = process.env.ADMIN_EMAILS ?? '';
+  const envValue = process.env.ADMIN_EMAILS ?? "";
   return envValue
-    .split('\n')
+    .split("\n")
     .map((e) => e.trim())
     .filter(Boolean);
 }
 
-const fetchWorkosAuth = createServerFn({ method: 'GET' }).handler(async () => {
+const fetchWorkosAuth = createServerFn({ method: "GET" }).handler(async () => {
   const auth = await getAuth();
   const email = auth.user?.email;
 
@@ -34,19 +39,19 @@ export const Route = createRootRouteWithContext<{
   head: () => ({
     meta: [
       {
-        charSet: 'utf-8',
+        charSet: "utf-8",
       },
       {
-        name: 'viewport',
-        content: 'width=device-width, initial-scale=1',
+        name: "viewport",
+        content: "width=device-width, initial-scale=1",
       },
       {
-        title: 'Alignment Hive',
+        title: "Alignment Hive",
       },
     ],
     links: [
-      { rel: 'stylesheet', href: appCssUrl },
-      { rel: 'icon', href: '/favicon.svg' },
+      { rel: "stylesheet", href: appCssUrl },
+      { rel: "icon", href: "/favicon.svg" },
     ],
   }),
   component: RootComponent,

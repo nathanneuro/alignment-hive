@@ -1,5 +1,5 @@
-import { defineSchema, defineTable } from 'convex/server';
-import { v } from 'convex/values';
+import { defineSchema, defineTable } from "convex/server";
+import { v } from "convex/values";
 
 export default defineSchema({
   users: defineTable({
@@ -8,8 +8,8 @@ export default defineSchema({
     firstName: v.optional(v.string()),
     lastName: v.optional(v.string()),
   })
-    .index('by_workos_id', ['workosId'])
-    .index('by_email', ['email']),
+    .index("by_workos_id", ["workosId"])
+    .index("by_email", ["email"]),
 
   sessions: defineTable({
     sessionId: v.string(),
@@ -22,18 +22,18 @@ export default defineSchema({
     summary: v.optional(v.string()),
     upload: v.optional(
       v.object({
-        storageId: v.id('_storage'),
+        storageId: v.id("_storage"),
         uploadedAt: v.number(),
-      })
+      }),
     ),
   })
-    .index('by_session_id', ['sessionId'])
-    .index('by_user_id', ['userId'])
-    .index('by_parent_session_id', ['parentSessionId']),
+    .index("by_session_id", ["sessionId"])
+    .index("by_user_id", ["userId"])
+    .index("by_parent_session_id", ["parentSessionId"]),
 
   checkouts: defineTable({
     checkoutId: v.string(),
     firstSeenAt: v.number(),
     lastSeenAt: v.number(),
-  }).index('by_checkout_id', ['checkoutId']),
+  }).index("by_checkout_id", ["checkoutId"]),
 });

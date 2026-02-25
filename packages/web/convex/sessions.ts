@@ -1,5 +1,5 @@
-import { v } from 'convex/values';
-import { mutation, query, internalMutation } from './_generated/server';
+import { v } from "convex/values";
+import { mutation, query, internalMutation } from "./_generated/server";
 
 export const heartbeatSession = mutation({
   args: {
@@ -12,24 +12,24 @@ export const heartbeatSession = mutation({
   handler: async (ctx, args) => {
     const identity = await ctx.auth.getUserIdentity();
     if (!identity) {
-      throw new Error('Not authenticated');
+      throw new Error("Not authenticated");
     }
 
     const userId = identity.subject;
     const now = Date.now();
 
     // Access name claims (customJwt passes through snake_case keys from JWT)
-    const givenName = (identity as Record<string, unknown>)['given_name'] as
+    const givenName = (identity as Record<string, unknown>)["given_name"] as
       | string
       | undefined;
-    const familyName = (identity as Record<string, unknown>)['family_name'] as
+    const familyName = (identity as Record<string, unknown>)["family_name"] as
       | string
       | undefined;
 
     // Upsert user record with latest identity info
     const existingUser = await ctx.db
-      .query('users')
-      .withIndex('by_workos_id', (q) => q.eq('workosId', userId))
+      .query("users")
+      .withIndex("by_workos_id", (q) => q.eq("workosId", userId))
       .first();
 
     if (existingUser) {
@@ -46,7 +46,7 @@ export const heartbeatSession = mutation({
         });
       }
     } else if (identity.email) {
-      await ctx.db.insert('users', {
+      await ctx.db.insert("users", {
         workosId: userId,
         email: identity.email,
         firstName: givenName,
@@ -55,20 +55,20 @@ export const heartbeatSession = mutation({
     }
 
     const existing = await ctx.db
-      .query('sessions')
-      .withIndex('by_session_id', (q) => q.eq('sessionId', args.sessionId))
+      .query("sessions")
+      .withIndex("by_session_id", (q) => q.eq("sessionId", args.sessionId))
       .first();
 
     if (existing) {
       if (existing.userId !== userId) {
-        throw new Error('Session belongs to different user');
+        throw new Error("Session belongs to different user");
       }
       await ctx.db.patch(existing._id, {
         lineCount: args.lineCount,
         lastHeartbeat: now,
       });
     } else {
-      await ctx.db.insert('sessions', {
+      await ctx.db.insert("sessions", {
         sessionId: args.sessionId,
         userId,
         checkoutId: args.checkoutId,
@@ -86,19 +86,19 @@ export const generateUploadUrl = mutation({
   handler: async (ctx, { sessionId }) => {
     const identity = await ctx.auth.getUserIdentity();
     if (!identity) {
-      throw new Error('Not authenticated');
+      throw new Error("Not authenticated");
     }
 
     const session = await ctx.db
-      .query('sessions')
-      .withIndex('by_session_id', (q) => q.eq('sessionId', sessionId))
+      .query("sessions")
+      .withIndex("by_session_id", (q) => q.eq("sessionId", sessionId))
       .first();
 
     if (!session) {
-      throw new Error('Session not found - heartbeat first');
+      throw new Error("Session not found - heartbeat first");
     }
     if (session.userId !== identity.subject) {
-      throw new Error('Session belongs to different user');
+      throw new Error("Session belongs to different user");
     }
 
     return await ctx.storage.generateUploadUrl();
@@ -108,25 +108,25 @@ export const generateUploadUrl = mutation({
 export const saveUpload = mutation({
   args: {
     sessionId: v.string(),
-    storageId: v.id('_storage'),
+    storageId: v.id("_storage"),
     summary: v.optional(v.string()),
   },
   handler: async (ctx, { sessionId, storageId, summary }) => {
     const identity = await ctx.auth.getUserIdentity();
     if (!identity) {
-      throw new Error('Not authenticated');
+      throw new Error("Not authenticated");
     }
 
     const session = await ctx.db
-      .query('sessions')
-      .withIndex('by_session_id', (q) => q.eq('sessionId', sessionId))
+      .query("sessions")
+      .withIndex("by_session_id", (q) => q.eq("sessionId", sessionId))
       .first();
 
     if (!session) {
-      throw new Error('Session not found');
+      throw new Error("Session not found");
     }
     if (session.userId !== identity.subject) {
-      throw new Error('Session belongs to different user');
+      throw new Error("Session belongs to different user");
     }
 
     await ctx.db.patch(session._id, {
@@ -148,8 +148,8 @@ export const listUserSessions = query({
     }
 
     return await ctx.db
-      .query('sessions')
-      .withIndex('by_user_id', (q) => q.eq('userId', identity.subject))
+      .query("sessions")
+      .withIndex("by_user_id", (q) => q.eq("userId", identity.subject))
       .collect();
   },
 });
@@ -160,14 +160,14 @@ export const upsertCheckout = mutation({
     const now = Date.now();
 
     const existing = await ctx.db
-      .query('checkouts')
-      .withIndex('by_checkout_id', (q) => q.eq('checkoutId', checkoutId))
+      .query("checkouts")
+      .withIndex("by_checkout_id", (q) => q.eq("checkoutId", checkoutId))
       .first();
 
     if (existing) {
       await ctx.db.patch(existing._id, { lastSeenAt: now });
     } else {
-      await ctx.db.insert('checkouts', {
+      await ctx.db.insert("checkouts", {
         checkoutId,
         firstSeenAt: now,
         lastSeenAt: now,
@@ -175,4 +175,3 @@ export const upsertCheckout = mutation({
     }
   },
 });
-

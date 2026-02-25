@@ -133,7 +133,12 @@ export async function loadTranscriptsDirs(hiveMindDir: string): Promise<Array<st
 
     // Prune directories that no longer exist
     const exists = await Promise.all(
-      dirs.map((dir) => access(dir).then(() => true, () => false)),
+      dirs.map((dir) =>
+        access(dir).then(
+          () => true,
+          () => false,
+        ),
+      ),
     );
     const valid = dirs.filter((_, i) => exists[i]);
     if (valid.length < dirs.length) {

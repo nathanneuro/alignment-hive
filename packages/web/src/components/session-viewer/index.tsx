@@ -1,5 +1,5 @@
-import { useEffect, useState, useRef, useCallback } from 'react';
-import { useVirtualizer } from '@tanstack/react-virtual';
+import { useEffect, useState, useRef, useCallback } from "react";
+import { useVirtualizer } from "@tanstack/react-virtual";
 import {
   parseSession,
   HiveMindMetaSchema,
@@ -7,9 +7,9 @@ import {
   type LogicalBlock,
   type HiveMindMeta,
   type KnownEntry,
-} from '@alignment-hive/shared';
-import { Link } from '@tanstack/react-router';
-import { formatSessionId } from '~/lib/format';
+} from "@alignment-hive/shared";
+import { Link } from "@tanstack/react-router";
+import { formatSessionId } from "~/lib/format";
 
 interface SessionViewerProps {
   url: string;
@@ -35,17 +35,17 @@ export function SessionViewer({ url }: SessionViewerProps) {
         }
 
         const text = await response.text();
-        const lines = text.split('\n').filter((line) => line.trim());
+        const lines = text.split("\n").filter((line) => line.trim());
 
         if (lines.length === 0) {
-          throw new Error('Empty session file');
+          throw new Error("Empty session file");
         }
 
         // Parse metadata from first line
         const metaLine = JSON.parse(lines[0]);
         const metaResult = HiveMindMetaSchema.safeParse(metaLine);
         if (!metaResult.success) {
-          throw new Error('Invalid session metadata');
+          throw new Error("Invalid session metadata");
         }
 
         // Parse entries
@@ -70,7 +70,7 @@ export function SessionViewer({ url }: SessionViewerProps) {
         }
       } catch (err) {
         if (!cancelled) {
-          setError(err instanceof Error ? err.message : 'Failed to load');
+          setError(err instanceof Error ? err.message : "Failed to load");
           setLoading(false);
         }
       }
@@ -157,13 +157,17 @@ function VirtualizedBlockList({
     <div
       ref={parentRef}
       className="overflow-auto"
-      style={{ contain: 'strict', height: 'calc(100vh - 205px)', minHeight: '400px' }}
+      style={{
+        contain: "strict",
+        height: "calc(100vh - 205px)",
+        minHeight: "400px",
+      }}
     >
       <div
         style={{
           height: `${virtualizer.getTotalSize()}px`,
-          width: '100%',
-          position: 'relative',
+          width: "100%",
+          position: "relative",
         }}
       >
         {virtualizer.getVirtualItems().map((virtualItem) => (
@@ -172,10 +176,10 @@ function VirtualizedBlockList({
             data-index={virtualItem.index}
             ref={virtualizer.measureElement}
             style={{
-              position: 'absolute',
+              position: "absolute",
               top: 0,
               left: 0,
-              width: '100%',
+              width: "100%",
               transform: `translateY(${virtualItem.start}px)`,
             }}
           >
@@ -203,8 +207,9 @@ function BlockRow({ block, isExpanded, onToggle }: BlockRowProps) {
   const typeColor = getTypeColor(block);
 
   // Only show agent links for Task blocks that spawn agents
-  const isTaskBlock = block.type === 'tool' && 'toolName' in block && block.toolName === 'Task';
-  const agentId = isTaskBlock && 'agentId' in block ? block.agentId : null;
+  const isTaskBlock =
+    block.type === "tool" && "toolName" in block && block.toolName === "Task";
+  const agentId = isTaskBlock && "agentId" in block ? block.agentId : null;
 
   if (!isExpanded) {
     return (
@@ -224,7 +229,11 @@ function BlockRow({ block, isExpanded, onToggle }: BlockRowProps) {
         {agentId && (
           <Link
             to="/admin/sessions/$sessionId"
-            params={{ sessionId: agentId.startsWith('agent-') ? agentId : `agent-${agentId}` }}
+            params={{
+              sessionId: agentId.startsWith("agent-")
+                ? agentId
+                : `agent-${agentId}`,
+            }}
             onClick={(e) => e.stopPropagation()}
             className="ml-auto shrink-0 font-mono text-xs text-primary hover:underline"
           >
@@ -251,7 +260,10 @@ function BlockRow({ block, isExpanded, onToggle }: BlockRowProps) {
         </span>
         <span className="truncate text-muted-foreground">{summary}</span>
       </button>
-      <div className="overflow-auto bg-muted/25 p-4" style={{ maxHeight: '50vh' }}>
+      <div
+        className="overflow-auto bg-muted/25 p-4"
+        style={{ maxHeight: "50vh" }}
+      >
         <BlockContent block={block} />
       </div>
     </div>
@@ -259,7 +271,7 @@ function BlockRow({ block, isExpanded, onToggle }: BlockRowProps) {
 }
 
 function BlockContent({ block }: { block: LogicalBlock }) {
-  if (block.type === 'tool' && 'toolInput' in block) {
+  if (block.type === "tool" && "toolInput" in block) {
     return (
       <div className="space-y-2 font-mono text-xs">
         <div>
@@ -280,7 +292,7 @@ function BlockContent({ block }: { block: LogicalBlock }) {
     );
   }
 
-  if ('content' in block) {
+  if ("content" in block) {
     return (
       <pre className="whitespace-pre-wrap break-words font-mono text-xs text-foreground">
         {block.content}
@@ -292,85 +304,86 @@ function BlockContent({ block }: { block: LogicalBlock }) {
 }
 
 function getBlockSummary(block: LogicalBlock): string {
-  if (block.type === 'tool' && 'toolName' in block) {
-    if (block.toolName === 'Edit' && 'toolInput' in block) {
+  if (block.type === "tool" && "toolName" in block) {
+    if (block.toolName === "Edit" && "toolInput" in block) {
       const input = block.toolInput as { file_path?: string };
       return input.file_path ?? block.toolName;
     }
-    if (block.toolName === 'Read' && 'toolInput' in block) {
+    if (block.toolName === "Read" && "toolInput" in block) {
       const input = block.toolInput as { file_path?: string };
       return input.file_path ?? block.toolName;
     }
-    if (block.toolName === 'Write' && 'toolInput' in block) {
+    if (block.toolName === "Write" && "toolInput" in block) {
       const input = block.toolInput as { file_path?: string };
       return input.file_path ?? block.toolName;
     }
-    if (block.toolName === 'Bash' && 'toolInput' in block) {
+    if (block.toolName === "Bash" && "toolInput" in block) {
       const input = block.toolInput as { command?: string };
       return input.command?.slice(0, 80) ?? block.toolName;
     }
-    if (block.toolName === 'Task' && 'toolInput' in block) {
+    if (block.toolName === "Task" && "toolInput" in block) {
       const input = block.toolInput as {
         subagent_type?: string;
         description?: string;
       };
-      return `${input.subagent_type ?? 'Task'}: ${input.description ?? ''}`;
+      return `${input.subagent_type ?? "Task"}: ${input.description ?? ""}`;
     }
     return block.toolName;
   }
 
-  if (block.type === 'thinking' && 'content' in block) {
+  if (block.type === "thinking" && "content" in block) {
     const wordCount = block.content.split(/\s+/).length;
     return `${wordCount} words`;
   }
 
-  if ('content' in block) {
+  if ("content" in block) {
     return truncate(block.content, 100);
   }
 
-  return '';
+  return "";
 }
 
 function getTypeLabel(block: LogicalBlock): string {
-  if (block.type === 'tool' && 'toolName' in block) {
+  if (block.type === "tool" && "toolName" in block) {
     // Use common abbreviations for known tools
     const toolAbbrevs: Record<string, string> = {
-      WebFetch: 'FETCH',
-      TodoWrite: 'TODO',
+      WebFetch: "FETCH",
+      TodoWrite: "TODO",
     };
-    return toolAbbrevs[block.toolName] ?? block.toolName.toUpperCase().slice(0, 6);
+    return (
+      toolAbbrevs[block.toolName] ?? block.toolName.toUpperCase().slice(0, 6)
+    );
   }
   // Use readable abbreviations for block types
   const typeAbbrevs: Record<string, string> = {
-    thinking: 'THINK',
-    assistant: 'ASST',
-    summary: 'SUMM',
+    thinking: "THINK",
+    assistant: "ASST",
+    summary: "SUMM",
   };
   return typeAbbrevs[block.type] ?? block.type.toUpperCase();
 }
 
 function getTypeColor(block: LogicalBlock): string {
   switch (block.type) {
-    case 'user':
-      return 'text-blue-600 dark:text-blue-400';
-    case 'assistant':
-      return 'text-green-600 dark:text-green-400';
-    case 'thinking':
-      return 'text-purple-600 dark:text-purple-400';
-    case 'tool':
-      return 'text-orange-600 dark:text-orange-400';
-    case 'system':
-      return 'text-gray-600 dark:text-gray-400';
-    case 'summary':
-      return 'text-cyan-600 dark:text-cyan-400';
+    case "user":
+      return "text-blue-600 dark:text-blue-400";
+    case "assistant":
+      return "text-green-600 dark:text-green-400";
+    case "thinking":
+      return "text-purple-600 dark:text-purple-400";
+    case "tool":
+      return "text-orange-600 dark:text-orange-400";
+    case "system":
+      return "text-gray-600 dark:text-gray-400";
+    case "summary":
+      return "text-cyan-600 dark:text-cyan-400";
     default:
-      return 'text-muted-foreground';
+      return "text-muted-foreground";
   }
 }
 
 function truncate(str: string, maxLen: number): string {
-  const firstLine = str.split('\n')[0];
+  const firstLine = str.split("\n")[0];
   if (firstLine.length <= maxLen) return firstLine;
-  return firstLine.slice(0, maxLen - 3) + '...';
+  return firstLine.slice(0, maxLen - 3) + "...";
 }
-

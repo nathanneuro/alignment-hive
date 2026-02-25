@@ -50,7 +50,7 @@ export type LoadAuthResult = AuthData | ErrorResult | null;
 
 /** Type guard for any result type that may contain an error */
 export function isErrorResult<T>(result: T | ErrorResult | null): result is ErrorResult {
-  return result !== null && typeof result === "object" && "error" in result;
+  return result !== null && typeof result === 'object' && 'error' in result;
 }
 
 export const isAuthError = isErrorResult<AuthData>;
