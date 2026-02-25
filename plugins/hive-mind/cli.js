@@ -14106,8 +14106,8 @@ var hook = {
     const cli = getCliCommand(userHasAlias);
     return `To review: ${cli} index --pending`;
   },
-  aliasUpdated: (sourceCmd) => {
-    return `hive-mind alias updated. To activate: ${sourceCmd}`;
+  aliasUpdated: () => {
+    return "hive-mind alias updated";
   },
   extractionsFailed: (count) => {
     return `Failed to extract ${count} session${count === 1 ? "" : "s"}`;
@@ -19841,8 +19841,8 @@ async function sessionStart() {
   if (status.authenticated) {
     try {
       const aliasResult = await updateAliasIfOutdated();
-      if (aliasResult.updated && aliasResult.sourceCmd) {
-        messages.push(hook.aliasUpdated(aliasResult.sourceCmd));
+      if (aliasResult.updated) {
+        messages.push(hook.aliasUpdated());
       }
       userHasAlias = aliasResult.hasAlias;
     } catch (err) {

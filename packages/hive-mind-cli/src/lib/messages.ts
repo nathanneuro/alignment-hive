@@ -50,8 +50,8 @@ export const hook = {
     const cli = getCliCommand(userHasAlias);
     return `To review: ${cli} index --pending`;
   },
-  aliasUpdated: (sourceCmd: string): string => {
-    return `hive-mind alias updated. To activate: ${sourceCmd}`;
+  aliasUpdated: (): string => {
+    return 'hive-mind alias updated';
   },
   extractionsFailed: (count: number): string => {
     return `Failed to extract ${count} session${count === 1 ? '' : 's'}`;
