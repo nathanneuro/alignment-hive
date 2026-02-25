@@ -10,13 +10,19 @@ import { $ } from "bun";
 import { readFile, writeFile } from "fs/promises";
 import { join, dirname } from "path";
 
-const PLUGINS_DIR = join(dirname(import.meta.dir), "plugins");
+const ROOT_DIR = dirname(import.meta.dir);
+const PLUGINS_DIR = join(ROOT_DIR, "plugins");
 const STATE_FILE = join(import.meta.dir, "state.json");
+const MARKETPLACE_FILE = join(ROOT_DIR, ".claude-plugin", "marketplace.json");
 
 interface PluginJson {
   name: string;
   version: string;
   description?: string;
+}
+
+interface MarketplaceJson {
+  plugins: Array<{ name: string }>;
 }
 
 interface State {
@@ -33,16 +39,18 @@ interface PluginUpdate {
 
 async function readPluginVersions(): Promise<Record<string, string>> {
   const versions: Record<string, string> = {};
-  const pluginDirs = ["hive-mind", "mats", "llms-fetch-mcp"];
 
-  for (const dir of pluginDirs) {
-    const pluginJsonPath = join(PLUGINS_DIR, dir, ".claude-plugin", "plugin.json");
+  const marketplaceContent = await readFile(MARKETPLACE_FILE, "utf-8");
+  const marketplace: MarketplaceJson = JSON.parse(marketplaceContent);
+
+  for (const entry of marketplace.plugins) {
+    const pluginJsonPath = join(PLUGINS_DIR, entry.name, ".claude-plugin", "plugin.json");
     try {
       const content = await readFile(pluginJsonPath, "utf-8");
       const plugin: PluginJson = JSON.parse(content);
       versions[plugin.name] = plugin.version;
     } catch (error) {
-      console.error(`Failed to read plugin.json for ${dir}:`, error);
+      console.error(`Failed to read plugin.json for ${entry.name}:`, error);
     }
   }
 

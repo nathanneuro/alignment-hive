@@ -45,16 +45,18 @@ cd packages/web && bun run dev
 
 ## Adding New Plugins
 
-New plugins must be registered in `.claude-plugin/marketplace.json` to appear in the marketplace. Add an entry with `name`, `source`, and `description`.
+New plugins must be registered in `.claude-plugin/marketplace.json` to appear in the marketplace. Add an entry with `name`, `source`, and `description`. The `name` must match the plugin's folder name under `plugins/` (e.g., `"name": "autopilot"` for `plugins/autopilot/`).
 
 ## Plugin Versioning
 
 When updating plugin content (skills, commands, hooks, etc.), you must bump the version in the plugin's `plugin.json` for users to receive the update. The auto-update system compares installed versions with marketplace versions - without a version bump, changes won't propagate to users.
 
 Plugin locations:
+- `plugins/autopilot/.claude-plugin/plugin.json`
 - `plugins/hive-mind/.claude-plugin/plugin.json`
 - `plugins/mats/.claude-plugin/plugin.json`
 - `plugins/llms-fetch-mcp/.claude-plugin/plugin.json`
+- `plugins/remote-kernels/.claude-plugin/plugin.json`
 
 For the mats plugin specifically:
 - **Minor version bump** (e.g., 0.1.x → 0.2.0): New best practices content - users will be prompted to review
@@ -97,4 +99,9 @@ For string interpolation (`$()`, backticks, `${}`), heredocs, loops, or advanced
 - Per-item shell logic: script, not `xargs sh -c '...'`
 - Git: `git <command>`, not `git -C <path> <command>` (breaks permissions)
 
-If a command that should be allowed is denied, or if project structure changes significantly, ask about running `/mats:permissions` to update settings.
+If a command that should be allowed is denied, or if project structure changes significantly, ask about running `/autopilot:setup` to update settings.
+
+## Codebase exploration
+
+Always use `precis` for codebase exploration. Run `precis .` for a full overview, or `precis src/some/directory` to zoom into a specific area.
+

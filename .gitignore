@@ -3,6 +3,7 @@
 node_modules
 .playwright-mcp/
 .env.local
+.claude/autopilot/
 docs/data/
 
 # Rust

@@ -1,10 +1,10 @@
-import { createFileRoute } from '@tanstack/react-router';
-import { getAuth } from '@workos/authkit-tanstack-react-start';
-import type { User } from '@workos/authkit-tanstack-react-start';
-import { Github } from 'lucide-react';
-import { Card } from '@/components/ui/card';
+import { createFileRoute } from "@tanstack/react-router";
+import { getAuth } from "@workos/authkit-tanstack-react-start";
+import type { User } from "@workos/authkit-tanstack-react-start";
+import { Github } from "lucide-react";
+import { Card } from "@/components/ui/card";
 
-export const Route = createFileRoute('/_authenticated/welcome')({
+export const Route = createFileRoute("/_authenticated/welcome")({
   loader: async () => {
     const { user } = await getAuth();
     return user;
@@ -20,12 +20,8 @@ function WelcomePage() {
       <Card className="max-w-2xl w-full p-8">
         <div className="flex items-center justify-between">
           <div>
-            <h1 className="text-3xl font-semibold">
-              You're connected
-            </h1>
-            <p className="text-muted-foreground">
-              Signed in as {user.email}
-            </p>
+            <h1 className="text-3xl font-semibold">You're connected</h1>
+            <p className="text-muted-foreground">Signed in as {user.email}</p>
           </div>
           <a
             href="https://github.com/Crazytieguy/alignment-hive"
@@ -38,7 +34,7 @@ function WelcomePage() {
           </a>
         </div>
 
-        <h2 className="text-xl font-medium">Next steps</h2>
+        <h2 className="text-xl font-medium">Getting Started</h2>
         <ol className="list-decimal list-inside space-y-3 text-sm">
           <li>
             Install Claude Code (
@@ -68,40 +64,56 @@ function WelcomePage() {
           <li>
             Enable auto-update:
             <ol className="list-decimal list-inside ml-4 space-y-1">
-              <li>Run <code className="bg-muted px-1 rounded text-xs">/plugin</code></li>
-              <li>Go to the <strong>Marketplaces</strong> tab</li>
-              <li>Select <strong>alignment-hive</strong></li>
-              <li>Select <strong>Enable auto-update</strong></li>
-              <li>Press <strong>Esc</strong> twice to exit the menu</li>
+              <li>
+                Run{" "}
+                <code className="bg-muted px-1 rounded text-xs">/plugin</code>
+              </li>
+              <li>
+                Go to the <strong>Marketplaces</strong> tab
+              </li>
+              <li>
+                Select <strong>alignment-hive</strong>
+              </li>
+              <li>
+                Select <strong>Enable auto-update</strong>
+              </li>
+              <li>
+                Press <strong>Esc</strong> twice to exit the menu
+              </li>
             </ol>
           </li>
           <li>
-            Install the mats plugin (in user scope):
+            Install the mats plugin:
             <pre className="p-2 bg-muted rounded text-xs">
               /plugin install mats@alignment-hive
             </pre>
           </li>
           <li>
-            Exit Claude Code:
+            Exit Claude Code and navigate to your project:
             <pre className="p-2 bg-muted rounded text-xs">/exit</pre>
-          </li>
-          <li>
-            Navigate to your project directory and ask Claude to help you set it up:
             <pre className="p-2 bg-muted rounded text-xs">
               cd ~/my-project && claude
             </pre>
+          </li>
+          <li>
+            Run best practices setup:
+            <pre className="p-2 bg-muted rounded text-xs">
+              /mats:best-practices
+            </pre>
             <p className="mt-1 text-muted-foreground">
-              Works for both new and existing projects.
+              Walks you through documentation, plugins, tooling, and permissions
+              — works for both new and existing projects.
             </p>
           </li>
         </ol>
 
         <div className="text-sm text-muted-foreground">
           <p>
-            Questions? Message{' '}
-            <strong>Yoav Tzfati</strong> on Slack in{' '}
-            <code className="bg-muted px-1 rounded text-xs">#ai-tools</code> or{' '}
-            <code className="bg-muted px-1 rounded text-xs">#support-engineering</code>
+            Questions? Message <strong>Yoav Tzfati</strong> on Slack in{" "}
+            <code className="bg-muted px-1 rounded text-xs">#ai-tools</code> or{" "}
+            <code className="bg-muted px-1 rounded text-xs">
+              #support-engineering
+            </code>
             .
           </p>
         </div>

@@ -122,7 +122,7 @@ List all files created and summarize:
 **If permissions are unconfigured** (from Step 4), include a warning:
 > Claude in the GitHub Action uses your project's `.claude/settings.json` for bash permissions. Without proper permissions, Claude won't be able to run build/test commands autonomously.
 
-Offer to invoke `/mats:permissions` to configure them.
+Recommend installing the autopilot plugin (`autopilot@alignment-hive`) if not already installed — it includes a permissions setup flow.
 
 Tell the user the following:
 

@@ -1,0 +1,5 @@
+{
+  "name": "autopilot",
+  "version": "0.1.0",
+  "description": "Autonomous operation with permission management for Claude Code"
+}

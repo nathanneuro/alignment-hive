@@ -42,7 +42,8 @@ Walk through all recommendations as a guided setup. For each category:
 
 Check `.claude/settings.json` for installed plugins. Propose relevant ones:
 
-- **MATS/Alignment**: `hive-mind@alignment-hive` - **Always ask about this one**
+- **Autopilot** (permissions + autonomous mode): `autopilot@alignment-hive` — **Always recommend this one**
+- **MATS/Alignment**: `hive-mind@alignment-hive` — **Always ask about this one**
 - **Python + GPU compute**: `remote-kernels@alignment-hive` — cloud GPU instances with Jupyter kernels (RunPod)
 - **TypeScript/JavaScript**: `frontend-design` (for web projects)
 - **Agent development**: `agent-sdk-dev`
@@ -57,10 +58,11 @@ Install by adding to `./.claude/settings.json` (project root):
 }
 ```
 
-For hive-mind (requires alignment-hive marketplace):
+For alignment-hive plugins (requires alignment-hive marketplace):
 ```json
 {
   "enabledPlugins": {
+    "autopilot@alignment-hive": true,
     "hive-mind@alignment-hive": true
   },
   "pluginMarketplaces": {
@@ -69,8 +71,7 @@ For hive-mind (requires alignment-hive marketplace):
 }
 ```
 
-After installing plugins, tell the user to exit (`/exit`) and continue with `claude -c`.
-For hive-mind, tell them to run `/hive-mind:setup` after restarting.
+Do NOT invoke setup skills directly during this flow — just recommend installing the plugins. Setup flows will be triggered after reload.
 
 ### Tooling (varies by project)
 
@@ -81,21 +82,15 @@ Consider modern tooling where appropriate:
 
 If a tool would be useful and isn't installed, ask if the user would like to install it.
 
-### Permissions (Highly Recommended)
+### Reload + Setup
 
-Proper permission configuration lets Claude work autonomously without compromising security. Essential for running Claude asynchronously without `--dangerously-skip-permissions` mode.
+After all plugins are installed, tell the user to exit and restart Claude (`/exit` then `claude -c`).
 
-**Detection:** Check `.claude/settings.json` and `.claude/settings.local.json`. Permissions are properly configured only if ALL of these conditions are met:
-- At least 15 allow rules total
-- At least 3 deny rules
-- Has safe commands like `Bash(ls*)`, `Bash(cat *)`, `Bash(grep *)`
-- Has xargs variants like `Bash(xargs cat*)`, `Bash(xargs -I{} head *)`
-- Has deny patterns like `Bash(for *)`, `Bash(timeout *)`
-- Has project-specific commands if applicable (e.g., `Bash(bun run dev)` for bun projects)
+Tell the user which of the installed plugins have setup flows they should run after reloading. Mention by plugin name, not exact skill command:
+- **autopilot** has a setup flow for permissions and autonomous mode
+- **remote-kernels** has a setup flow for RunPod configuration
 
-If ANY condition fails, offer to set up permissions.
-
-**Action:** If the user agrees to configure permissions, invoke `/mats:permissions`. The user can agree in free text - they don't need to run the command themselves.
+Each plugin's SessionStart hook will also nudge about its own setup when the session starts.
 
 ### GitHub Action (Async Claude)
 

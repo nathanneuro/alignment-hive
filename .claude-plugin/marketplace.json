@@ -21,6 +21,11 @@
       "name": "remote-kernels",
       "source": "./plugins/remote-kernels",
       "description": "Cloud GPU instances with Jupyter kernels for AI/ML workloads"
+    },
+    {
+      "name": "autopilot",
+      "source": "./plugins/autopilot",
+      "description": "Autonomous operation with permission management for Claude Code"
     }
   ]
 }

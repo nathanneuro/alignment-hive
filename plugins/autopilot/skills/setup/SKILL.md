@@ -1,6 +1,6 @@
 ---
-name: permissions
-description: This skill should be used when the user asks to "set up permissions", "configure permissions", "fix permission prompts", "allow commands", "update permissions", "reduce prompts", "stop asking for permission", or mentions Claude Code permission configuration. Also use when permission-related friction is causing workflow issues.
+name: setup
+description: This skill should be used when the user asks to "set up permissions", "configure permissions", "fix permission prompts", "allow commands", "update permissions", "reduce prompts", "stop asking for permission", "enable autonomous mode", "set up autopilot", or mentions Claude Code permission configuration. Also use when permission-related friction is causing workflow issues.
 ---
 
 # Claude Code Permissions Configuration
@@ -29,6 +29,7 @@ Proper permissions let Claude work without constant permission prompts while mai
 4. Ask web access preference + edit
 5. Ask MCP server permissions + edit (if applicable)
 6. Confirm secrets/git/mode/cleanup + edit
+7. Autonomous mode opt-in
 
 ---
 
@@ -273,7 +274,8 @@ If hive-mind plugin is detected, also include:
       "Bash(xargs -I{} dirname *)",
       "Bash(xargs -I{} grep *)",
       "Bash(xargs -I{} cut *)",
-      "Bash(xargs -I{} sed -n *)"
+      "Bash(xargs -I{} sed -n *)",
+      "Skill"
     ],
     "deny": [
       "Bash(for *)",
@@ -325,7 +327,9 @@ Avoid string interpolation (`$()`, backticks, `${}`), heredocs, loops, and advan
 - Per-item shell logic: use scripts, not `xargs sh -c '...'`
 - Git: `git <command>`, not `git -C <path> <command>` (breaks permissions)
 
-If a command that should be allowed is denied, or if project structure changes significantly, ask about running `/mats:permissions` to update settings.
+Before starting work that requires specific Bash commands, check `.claude/settings.json` and `.claude/settings.local.json` for allowed commands.
+
+If a command that should be allowed is denied, or if project structure changes significantly, ask about running `/autopilot:setup` to update settings.
 ```
 
 ---
@@ -871,3 +875,44 @@ For projects with credentials files (if present):
 }
 ```
 
+---
+
+## Step 7: Autonomous Mode Opt-In
+
+After all permissions are configured, explain autonomous mode and ask for explicit consent.
+
+**Explanation to give the user:**
+
+The autopilot plugin includes an autonomous mode that changes how Claude handles permission prompts when you're in `acceptEdits` mode:
+
+- **Without autonomous mode:** Claude blocks on every unpermitted command, waiting for you to approve or deny each one.
+- **With autonomous mode:** Unpermitted commands are automatically denied. Claude will try alternatives or explain what it needs instead of blocking.
+
+This means you can leave Claude running unattended in `acceptEdits` mode. If Claude needs a command that isn't in the allow list, it will either find another way or stop and tell you what it needs.
+
+**Important:** If you need to approve a one-off command that isn't in your allow list, switch out of `acceptEdits` mode first (use the permission mode selector). Autonomous mode only activates in `acceptEdits` mode.
+
+**Question:**
+
+> "Enable autonomous mode? (auto-deny unpermitted commands in acceptEdits mode instead of blocking)"
+
+- **Yes** - Enable autonomous mode
+- **No** - Keep standard behavior (block on unpermitted commands)
+
+### Action
+
+Create the state directory and write the state file:
+
+```bash
+mkdir -p .claude/autopilot
+```
+
+Write `.claude/autopilot/state.json`:
+- If yes: `{"autonomous_mode": true}`
+- If no: `{"autonomous_mode": false}`
+
+Ensure `.claude/autopilot/` is gitignored — add to `.gitignore` if not already covered.
+
+## Completion
+
+Write the plugin version to `.claude/autopilot/setup-version` so the SessionStart hook can detect version changes in the future.

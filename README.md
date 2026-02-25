@@ -7,7 +7,7 @@ Large orgs benefit from shared tooling and accumulated knowledge across their ag
 - **Plugin marketplace** - Curated Claude Code plugins with skills for common research workflows
 - **hive-mind** - A system for sharing session learnings across the community (in development)
 
-## Installation
+## Getting Started
 
 ### Prerequisites
 
@@ -16,7 +16,7 @@ Install [Claude Code](https://code.claude.com/docs/en/overview) if you haven't a
 curl -fsSL https://claude.ai/install.sh | bash
 ```
 
-### Add the marketplace
+### 1. Add the marketplace
 
 Run the following commands from within Claude Code (the `/` prefix indicates a Claude Code command):
 ```
@@ -30,33 +30,13 @@ Enable auto-update to get new plugins and updates automatically:
 4. Select **Enable auto-update**
 5. Press **Esc** twice to exit the menu
 
-Install the mats plugin (recommended for MATS fellows):
+### 2. Install the mats plugin
+
 ```
 /plugin install mats@alignment-hive
 ```
 
-The mats plugin includes:
-- **best-practices** - Guided setup for documentation, plugins, tooling, and permissions
-- **fellow-handbook** - Quick lookup of MATS policies, compute access, housing, and program logistics
-- **permissions** - Configure Claude Code permissions to reduce permission prompts
-- **lit-review** - Automated literature review with paper search and summarization
-- **github-action** - Set up the Claude Code GitHub Action for autonomous work on issues and PRs
-
-Also available:
-```
-/plugin install llms-fetch-mcp@alignment-hive
-```
-
-Adds an MCP server for fetching documentation with [llms.txt](https://llmstxt.org/) support.
-
-For projects using cloud GPUs (requires a [RunPod](https://runpod.io) account):
-```
-/plugin install remote-kernels@alignment-hive
-```
-
-Adds an MCP server for spinning up GPU pods and running code in Jupyter kernels. Run `/remote-kernels:setup` to configure.
-
-### Start your project
+### 3. Set up your project
 
 Exit Claude Code and navigate to your project directory:
 ```
@@ -66,7 +46,22 @@ Exit Claude Code and navigate to your project directory:
 cd ~/my-project && claude
 ```
 
-Works for both new and existing projects. Ask Claude to help you set it up!
+Then run best practices setup:
+```
+/mats:best-practices
+```
+
+This walks you through documentation, plugins, tooling, and permissions — works for both new and existing projects.
+
+## Available Plugins
+
+| Plugin | Description | Install |
+|--------|-------------|---------|
+| mats | Best practices, fellow handbook, lit review, GitHub Action | `/plugin install mats@alignment-hive` |
+| autopilot | Autonomous operation + permission management | `/plugin install autopilot@alignment-hive` |
+| llms-fetch-mcp | Documentation fetching with [llms.txt](https://llmstxt.org/) support | `/plugin install llms-fetch-mcp@alignment-hive` |
+| remote-kernels | Cloud GPU instances with Jupyter kernels ([RunPod](https://runpod.io)) | `/plugin install remote-kernels@alignment-hive` |
+| hive-mind | Session sharing (in development) | `/plugin install hive-mind@alignment-hive` |
 
 ## Contributing
 
