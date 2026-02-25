@@ -25,11 +25,7 @@ export const hook = {
   bunNotInstalled: (): string => {
     return 'To set up hive-mind: run /hive-mind:setup';
   },
-  pendingSessions: (count: number, earliestUploadAt: number | null): string => {
-    if (!earliestUploadAt) {
-      return `${count} session${count === 1 ? '' : 's'} ready to upload`;
-    }
-
+  pendingSessions: (count: number, earliestUploadAt: number): string => {
     const totalMinutes = Math.max(0, Math.ceil((earliestUploadAt - Date.now()) / (1000 * 60)));
     const hours = Math.floor(totalMinutes / 60);
     const minutes = totalMinutes % 60;

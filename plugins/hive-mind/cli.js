@@ -14084,9 +14084,6 @@ var hook = {
     return "To set up hive-mind: run /hive-mind:setup";
   },
   pendingSessions: (count, earliestUploadAt) => {
-    if (!earliestUploadAt) {
-      return `${count} session${count === 1 ? "" : "s"} ready to upload`;
-    }
     const totalMinutes = Math.max(0, Math.ceil((earliestUploadAt - Date.now()) / (1000 * 60)));
     const hours = Math.floor(totalMinutes / 60);
     const minutes = totalMinutes % 60;
@@ -19866,8 +19863,7 @@ async function sessionStart() {
       const eligible = eligibilityResults.filter((s) => s.status === "ready");
       const showPendingMsg = pending.length > 1;
       if (showPendingMsg) {
-        const uploadTimes = pending.map((s) => s.eligibleAt).filter((t) => t !== null);
-        const earliestUploadAt = uploadTimes.length > 0 ? Math.min(...uploadTimes) : null;
+        const earliestUploadAt = Math.min(...pending.map((s) => s.eligibleAt));
         messages.push(hook.pendingSessions(pending.length, earliestUploadAt));
       }
       if (eligible.length > 0) {

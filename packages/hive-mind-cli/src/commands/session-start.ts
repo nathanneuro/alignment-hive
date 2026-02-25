@@ -191,8 +191,7 @@ export async function sessionStart(): Promise<number> {
 
       const showPendingMsg = pending.length > 1;
       if (showPendingMsg) {
-        const uploadTimes = pending.map((s) => s.eligibleAt).filter((t): t is number => t !== null);
-        const earliestUploadAt = uploadTimes.length > 0 ? Math.min(...uploadTimes) : null;
+        const earliestUploadAt = Math.min(...pending.map((s) => s.eligibleAt!));
         messages.push(hook.pendingSessions(pending.length, earliestUploadAt));
       }
 
