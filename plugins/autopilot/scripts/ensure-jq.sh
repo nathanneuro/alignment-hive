@@ -21,13 +21,15 @@ ARCH=$(uname -m)
 case "$OS" in
   linux)  OS_NAME="linux" ;;
   darwin) OS_NAME="macos" ;;
-  *)      echo "autopilot: unsupported OS for jq bootstrap: $OS" >&2; exit 0 ;;
+  *)      echo "{\"systemMessage\": \"autopilot: Cannot bootstrap jq — unsupported OS: $OS. Install jq manually.\"}"
+          exit 0 ;;
 esac
 
 case "$ARCH" in
   x86_64)        ARCH_NAME="amd64" ;;
   aarch64|arm64) ARCH_NAME="arm64" ;;
-  *)             echo "autopilot: unsupported arch for jq bootstrap: $ARCH" >&2; exit 0 ;;
+  *)             echo "{\"systemMessage\": \"autopilot: Cannot bootstrap jq — unsupported architecture: $ARCH. Install jq manually.\"}"
+                 exit 0 ;;
 esac
 
 JQ_VERSION="1.7.1"
@@ -39,12 +41,13 @@ if curl -fSL "$DOWNLOAD_URL" -o "$BINARY"; then
   chmod +x "$BINARY"
   # Verify the binary works (catches corrupt/partial downloads)
   if ! "$BINARY" --version >/dev/null 2>&1; then
-    echo "Downloaded jq binary is corrupt or incompatible" >&2
     rm -f "$BINARY"
+    echo '{"systemMessage": "autopilot: Downloaded jq binary is corrupt. Install jq manually."}'
     exit 0
   fi
+  echo '{"systemMessage": "autopilot: jq bootstrapped. Auto-deny is now active."}'
 else
-  echo "Failed to download jq from: $DOWNLOAD_URL" >&2
   rm -f "$BINARY"
+  echo '{"systemMessage": "autopilot: Failed to download jq. Auto-deny is disabled until jq is installed."}'
   exit 0
 fi

@@ -20,10 +20,11 @@ else
 fi
 
 # Extract everything we need in a single jq call
-eval "$(echo "$input" | "$JQ" -r '
+eval "$(echo "$input" | "$JQ" -r --arg cwd "$CLAUDE_PROJECT_DIR" '
   "permission_mode=" + (.permission_mode | @sh),
   "has_session_dest=" + ([.permission_suggestions // [] | .[] | select(.destination == "session")] | length | tostring),
-  "rule_content=" + ([.permission_suggestions // [] | .[] | select(.type == "addRules") | .rules[]? | .ruleContent] | first // "" | @sh),
+  "session_in_project=" + ([.permission_suggestions // [] | .[] | select(.destination == "session") | .rules[]? | .ruleContent | gsub("^/+"; "/") | gsub("/\\*\\*$"; "") | startswith($cwd)] | any | tostring),
+  "rule_content=" + ([.permission_suggestions // [] | .[] | select(.type == "addRules" and .destination != "session") | .rules[]? | .ruleContent] | first // "" | @sh),
   "has_suggestions=" + (.permission_suggestions // [] | length > 0 | tostring)
 ')"
 
@@ -37,8 +38,8 @@ if ! "$JQ" -e '.autonomous_mode == true' "$STATE_FILE" >/dev/null 2>&1; then
   exit 0
 fi
 
-# Let through suggestions with destination:"session" (directory grants, settings edits)
-if [ "$has_session_dest" -gt 0 ]; then
+# Let through session suggestions unless they point inside the project dir (bogus)
+if [ "$has_session_dest" -gt 0 ] && [ "$session_in_project" != "true" ]; then
   exit 0
 fi
 
@@ -46,9 +47,9 @@ fi
 if [ -n "$rule_content" ]; then
   message="Command denied in autonomous mode. \`${rule_content}\` is not in the allow list."
 elif [ "$has_suggestions" = "true" ]; then
-  message="Command denied in autonomous mode."
+  message="Command denied in autonomous mode. Command likely contains variable references or field expressions that conflict with permission matching."
 else
-  message="Command denied in autonomous mode. Command likely contains command substitution or ambiguous syntax."
+  message="Command denied in autonomous mode. Command likely contains command substitution or ambiguous syntax that conflicts with permission matching."
 fi
 
 # Output deny decision using jq to ensure valid JSON

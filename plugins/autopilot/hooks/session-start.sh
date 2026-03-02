@@ -4,26 +4,30 @@ set -euo pipefail
 STATE_FILE="$CLAUDE_PROJECT_DIR/.claude/autopilot/state.json"
 LOG_FILE="$HOME/.cache/autopilot/bootstrap.log"
 
+# On any error, log and inform user
+mkdir -p "$(dirname "$LOG_FILE")" 2>/dev/null
+trap 'echo "$0: line $LINENO: unexpected error" >> "$LOG_FILE" 2>/dev/null; echo "{\"systemMessage\":\"autopilot: Session start error. Details: $LOG_FILE\"}"' ERR
+
 # No state file → not configured
 if [ ! -f "$STATE_FILE" ]; then
   echo '{"systemMessage": "autopilot: Not configured. Run /autopilot:setup"}'
   exit 0
 fi
 
-# Ensure jq is available for state check and auto-deny hook
-mkdir -p "$(dirname "$LOG_FILE")"
-bash "${CLAUDE_PLUGIN_ROOT}/scripts/ensure-jq.sh" 2>"$LOG_FILE"
-
+# Find jq — check only, no download yet
 if command -v jq >/dev/null 2>&1; then
   JQ="jq"
 elif [ -x "$HOME/.cache/autopilot/jq" ]; then
   JQ="$HOME/.cache/autopilot/jq"
 else
-  echo "{\"systemMessage\": \"autopilot: Setup error, autonomous mode disabled. Details: $LOG_FILE\"}"
+  # No jq yet — async hook will bootstrap it and report back
+  echo '{"systemMessage": "autopilot: Bootstrapping jq. Auto-deny will activate once ready."}'
   exit 0
 fi
 
-# Check if autonomous mode is enabled
-if ! "$JQ" -e '.autonomous_mode == true' "$STATE_FILE" >/dev/null 2>&1; then
-  exit 0
+# Check autonomous mode
+if "$JQ" -e '.autonomous_mode == true' "$STATE_FILE" >/dev/null 2>&1; then
+  echo '{"systemMessage": "autopilot: Autonomous mode active"}'
+else
+  echo '{"systemMessage": "autopilot: Installed"}'
 fi
